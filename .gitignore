@@ -1,0 +1,21 @@
+# Local virtual environment
+.venv/
+
+# Local environment secrets
+.env
+.env.*
+!.env.template
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
