@@ -18,7 +18,7 @@ def get_document_acl_decision(
             denied_by="tenant",
         )
 
-    if document.is_deleted:
+    if document.is_deleted and action == PermissionAction.READ:
         return AclDecision(
             allowed=False,
             reason="Document is deleted.",

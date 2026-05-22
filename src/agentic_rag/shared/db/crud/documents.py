@@ -72,8 +72,14 @@ def create_document(
 
 
 # --- GET ONE ---
-def get_document(db: Session, id: UUID, tenant_id: str) -> Optional[Document]:
-    return (
+def get_document(
+    db: Session,
+    id: UUID,
+    tenant_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Optional[Document]:
+    query = (
         db.query(Document)
         .options(
             selectinload(Document.acl),
@@ -83,10 +89,11 @@ def get_document(db: Session, id: UUID, tenant_id: str) -> Optional[Document]:
         .filter(
             Document.id == id,
             Document.tenant_id == tenant_id,
-            Document.is_deleted.is_(False),
         )
-        .first()
     )
+    if not include_deleted:
+        query = query.filter(Document.is_deleted.is_(False))
+    return query.first()
 
 
 # --- LIST MANY ---

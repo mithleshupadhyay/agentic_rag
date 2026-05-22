@@ -72,7 +72,7 @@ class DocumentRead(ORMModel):
     owner_user_id: str | None = None
     acl_version: int = Field(..., ge=1)
     classification_level: ClassificationLevel = ClassificationLevel.INTERNAL
-    metadata: JsonObject = Field(default_factory=dict)
+    metadata: JsonObject = Field(default_factory=dict, validation_alias="metadata_")
     created_by: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -107,3 +107,7 @@ class DocumentSearchResponse(APIModel):
     items: list[DocumentListItem]
     page: PageResponse
 
+
+class DocumentActionResponse(APIModel):
+    id: UUID
+    status: str = Field(..., min_length=1)

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from agentic_rag.api import health
+from agentic_rag.api import documents, health
 from agentic_rag.shared.config import settings
 
 
@@ -31,6 +31,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(documents.router)
 
 
 def custom_openapi() -> dict[str, Any]:

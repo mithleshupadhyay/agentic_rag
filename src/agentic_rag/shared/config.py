@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     local_roles_csv: str = Field(default="admin,user", validation_alias="LOCAL_ROLES")
     local_groups_csv: str = Field(default="", validation_alias="LOCAL_GROUPS")
     local_scopes_csv: str = Field(
-        default="documents:read,documents:write,query:run,ingestion:write",
+        default="documents:read,documents:write,documents:delete,query:run,ingestion:write",
         validation_alias="LOCAL_SCOPES",
     )
     local_acl_version: int = Field(default=1, ge=1, validation_alias="LOCAL_ACL_VERSION")
