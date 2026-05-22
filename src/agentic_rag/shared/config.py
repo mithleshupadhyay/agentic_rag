@@ -5,13 +5,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    auth_provider: str = Field(default="keycloak", validation_alias="AUTH_PROVIDER")
+    auth_provider: str = Field(default="local", validation_alias="AUTH_PROVIDER")
     app_name: str = Field(default="Agentic RAG", validation_alias="APP_NAME")
     app_version: str = Field(default="0.1.0", validation_alias="APP_VERSION")
     allowed_origins_csv: str = Field(default="*", validation_alias="ALLOWED_ORIGINS")
     oidc_issuer_url: str = Field(default="", validation_alias="OIDC_ISSUER_URL")
     oidc_audience: str = Field(default="", validation_alias="OIDC_AUDIENCE")
     oidc_jwks_url: str = Field(default="", validation_alias="OIDC_JWKS_URL")
+    local_auth_token: str = Field(default="local-dev-token", validation_alias="LOCAL_AUTH_TOKEN")
+    local_user_id: str = Field(default="local-user", validation_alias="LOCAL_USER_ID")
+    local_tenant_id: str = Field(default="local-tenant", validation_alias="LOCAL_TENANT_ID")
+    local_workspace_id: str | None = Field(default=None, validation_alias="LOCAL_WORKSPACE_ID")
+    local_roles_csv: str = Field(default="admin,user", validation_alias="LOCAL_ROLES")
+    local_groups_csv: str = Field(default="", validation_alias="LOCAL_GROUPS")
+    local_scopes_csv: str = Field(
+        default="documents:read,documents:write,query:run,ingestion:write",
+        validation_alias="LOCAL_SCOPES",
+    )
+    local_acl_version: int = Field(default=1, ge=1, validation_alias="LOCAL_ACL_VERSION")
     database_url: str = Field(
         default="postgresql+asyncpg://agentic_rag:agentic_rag@localhost:5432/agentic_rag",
         validation_alias="DATABASE_URL",
@@ -37,6 +48,22 @@ class Settings(BaseSettings):
             for origin in self.allowed_origins_csv.split(",")
             if origin.strip()
         ]
+
+    @staticmethod
+    def _split_csv(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def local_roles(self) -> list[str]:
+        return self._split_csv(self.local_roles_csv)
+
+    @property
+    def local_groups(self) -> list[str]:
+        return self._split_csv(self.local_groups_csv)
+
+    @property
+    def local_scopes(self) -> list[str]:
+        return self._split_csv(self.local_scopes_csv)
 
     @property
     def sync_database_url(self) -> str:
