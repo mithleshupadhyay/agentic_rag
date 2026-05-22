@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -124,9 +124,9 @@ def list_documents(
     tenant_id: str,
     skip: int = 0,
     limit: int = 50,
-    sort: Optional[list[str]] = None,
-    sort_dir: Optional[list[str]] = None,
-) -> list[Document]:
+    sort: Optional[List[str]] = None,
+    sort_dir: Optional[List[str]] = None,
+) -> List[Document]:
     sort = sort or ["created_at"]
     sort_dir = sort_dir or ["desc"]
     logger.info(
@@ -324,8 +324,8 @@ def restore_document(
 def apply_sorting(
     query: Query,
     model,
-    sort_fields: list[str],
-    directions: list[str],
+    sort_fields: List[str],
+    directions: List[str],
 ) -> Query:
     for field, dir_ in zip(sort_fields, directions):
         column = getattr(model, field, None)
@@ -338,9 +338,9 @@ def search_documents(
     db: Session,
     tenant_id: str,
     req: DocumentSearchRequest,
-    sort: Optional[list[str]] = None,
-    sort_dir: Optional[list[str]] = None,
-) -> tuple[list[Document], int]:
+    sort: Optional[List[str]] = None,
+    sort_dir: Optional[List[str]] = None,
+) -> Tuple[List[Document], int]:
     sort = sort or ["created_at"]
     sort_dir = sort_dir or ["desc"]
     logger.info(
