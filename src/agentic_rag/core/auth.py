@@ -109,7 +109,7 @@ async def _verify_oidc_token(token: str) -> UserContext:
                     or payload.get("org_id")
                     or payload.get("organization_id")
                     or payload.get("https://agentic-rag.ai/tenant_id")
-                    or payload.get("https://detoxio.ai/org_name")
+                    or payload.get("https://agentic-rag.ai/org_id")
                     or user_id
                 )
 
