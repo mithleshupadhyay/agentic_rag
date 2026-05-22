@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -16,6 +17,9 @@ from agentic_rag.shared.schemas.documents import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 # --- CREATE ---
 def create_document(
     user_context: UserContext,
@@ -24,6 +28,10 @@ def create_document(
     object_key: Optional[str] = None,
 ) -> Document:
     try:
+        logger.info(
+            f"[DB] Creating document tenant={user_context.tenant_id} "
+            f"user={user_context.id} source_type={obj_in.source_type}"
+        )
         file_metadata = obj_in.file
         document_acl = obj_in.acl
 
@@ -61,10 +69,15 @@ def create_document(
         db.commit()
         db.refresh(db_obj)
         _ = db_obj.acl
+        logger.info(
+            f"[DB] Created document {db_obj.id} tenant={db_obj.tenant_id} "
+            f"status={db_obj.status}"
+        )
         return db_obj
 
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        logger.exception(f"[DB] Failed to create document: {e}")
         raise HTTPException(
             status_code=400,
             detail="Database error during document creation.",
@@ -79,6 +92,10 @@ def get_document(
     *,
     include_deleted: bool = False,
 ) -> Optional[Document]:
+    logger.info(
+        f"[DB] Fetching document {id} tenant={tenant_id} "
+        f"include_deleted={include_deleted}"
+    )
     query = (
         db.query(Document)
         .options(
@@ -93,7 +110,12 @@ def get_document(
     )
     if not include_deleted:
         query = query.filter(Document.is_deleted.is_(False))
-    return query.first()
+    document = query.first()
+    if document:
+        logger.info(f"[DB] Found document {id} tenant={tenant_id}")
+    else:
+        logger.warning(f"[DB] Document {id} not found tenant={tenant_id}")
+    return document
 
 
 # --- LIST MANY ---
@@ -107,6 +129,10 @@ def list_documents(
 ) -> list[Document]:
     sort = sort or ["created_at"]
     sort_dir = sort_dir or ["desc"]
+    logger.info(
+        f"[DB] Listing documents tenant={tenant_id} skip={skip} limit={limit} "
+        f"sort={sort} sort_dir={sort_dir}"
+    )
 
     query = (
         db.query(Document)
@@ -120,7 +146,9 @@ def list_documents(
         )
     )
     query = apply_sorting(query, Document, sort, sort_dir)
-    return query.offset(skip).limit(limit).all()
+    documents = query.offset(skip).limit(limit).all()
+    logger.info(f"[DB] Listed {len(documents)} documents tenant={tenant_id}")
+    return documents
 
 
 # --- UPDATE ---
@@ -129,6 +157,7 @@ def update_document(
     db_obj: Document,
     obj_in: DocumentUpdateRequest,
 ) -> Document:
+    logger.info(f"[DB] Updating document {db_obj.id} tenant={db_obj.tenant_id}")
     if obj_in.title is not None:
         db_obj.title = obj_in.title
     if obj_in.metadata is not None:
@@ -162,10 +191,12 @@ def update_document(
         db.commit()
         db.refresh(db_obj)
         _ = db_obj.acl
+        logger.info(f"[DB] Updated document {db_obj.id} tenant={db_obj.tenant_id}")
         return db_obj
 
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        logger.exception(f"[DB] Failed to update document {db_obj.id}: {e}")
         raise HTTPException(
             status_code=400,
             detail="Database error during document update.",
@@ -178,9 +209,15 @@ def update_document_by_id(
     tenant_id: str,
     obj_in: DocumentUpdateRequest,
 ) -> Document:
+    logger.info(
+        f"[DB] Updating document by id {document_id} tenant={tenant_id}"
+    )
     db_obj = get_document(db, document_id, tenant_id)
 
     if not db_obj:
+        logger.warning(
+            f"[DB] Document {document_id} not found for update tenant={tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
     return update_document(db, db_obj, obj_in)
@@ -194,6 +231,9 @@ def delete_document(
     *,
     hard_delete: bool = False,
 ) -> None:
+    logger.info(
+        f"[DB] Deleting document {id} tenant={tenant_id} hard_delete={hard_delete}"
+    )
     obj = (
         db.query(Document)
         .filter(
@@ -206,6 +246,7 @@ def delete_document(
     if obj:
         if hard_delete:
             db.delete(obj)
+            logger.info(f"[DB] Hard deleted document {id} tenant={tenant_id}")
         else:
             deleted_at = datetime.now(timezone.utc)
             obj.status = "deleted"
@@ -226,7 +267,10 @@ def delete_document(
                     synchronize_session=False,
                 )
             )
+            logger.info(f"[DB] Soft deleted document {id} tenant={tenant_id}")
         db.commit()
+    else:
+        logger.warning(f"[DB] Document {id} not found for delete tenant={tenant_id}")
 
 
 # --- RESTORE DELETED ---
@@ -235,6 +279,7 @@ def restore_document(
     id: UUID,
     tenant_id: str,
 ) -> Optional[Document]:
+    logger.info(f"[DB] Restoring document {id} tenant={tenant_id}")
     obj = (
         db.query(Document)
         .options(selectinload(Document.acl))
@@ -268,8 +313,10 @@ def restore_document(
         db.commit()
         db.refresh(obj)
         _ = obj.acl
+        logger.info(f"[DB] Restored document {id} tenant={tenant_id}")
         return obj
 
+    logger.warning(f"[DB] Document {id} not found for restore tenant={tenant_id}")
     return None
 
 
@@ -296,6 +343,10 @@ def search_documents(
 ) -> tuple[list[Document], int]:
     sort = sort or ["created_at"]
     sort_dir = sort_dir or ["desc"]
+    logger.info(
+        f"[DB] Searching documents tenant={tenant_id} page={req.page.page} "
+        f"size={req.page.size} sort={sort} sort_dir={sort_dir}"
+    )
 
     query = (
         db.query(Document)
@@ -338,4 +389,9 @@ def search_documents(
 
     total = query.order_by(None).count()
     query = apply_sorting(query, Document, sort, sort_dir)
-    return query.offset(req.page.offset).limit(req.page.size).all(), total
+    documents = query.offset(req.page.offset).limit(req.page.size).all()
+    logger.info(
+        f"[DB] Search returned {len(documents)} documents of total={total} "
+        f"tenant={tenant_id}"
+    )
+    return documents, total

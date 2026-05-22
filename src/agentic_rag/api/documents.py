@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -31,6 +32,7 @@ from agentic_rag.shared.schemas.documents import (
 )
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
@@ -44,10 +46,17 @@ def create_document_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:write")),
 ) -> DocumentRead:
+    logger.info(
+        f"[DocumentAPI] Create document requested tenant={user_context.tenant_id} "
+        f"user={user_context.id} source_type={payload.source_type}"
+    )
     document = create_document(
         user_context=user_context,
         db=db,
         obj_in=payload,
+    )
+    logger.info(
+        f"[DocumentAPI] Created document {document.id} tenant={document.tenant_id}"
     )
     return DocumentRead.model_validate(document)
 
@@ -59,6 +68,10 @@ def list_documents_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:read")),
 ) -> DocumentSearchResponse:
+    logger.info(
+        f"[DocumentAPI] List documents requested tenant={user_context.tenant_id} "
+        f"user={user_context.id} page={page} size={size}"
+    )
     request = DocumentSearchRequest(page=PageRequest(page=page, size=size))
     documents, _ = search_documents(
         db=db,
@@ -72,6 +85,10 @@ def list_documents_endpoint(
         for document in documents
         if can_read_document(user_context=user_context, document=document)
     ]
+    logger.info(
+        f"[DocumentAPI] List documents returned {len(readable_documents)} readable "
+        f"items for tenant={user_context.tenant_id}"
+    )
 
     return DocumentSearchResponse(
         items=[
@@ -92,6 +109,10 @@ def search_documents_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:read")),
 ) -> DocumentSearchResponse:
+    logger.info(
+        f"[DocumentAPI] Search documents requested tenant={user_context.tenant_id} "
+        f"user={user_context.id} page={payload.page.page} size={payload.page.size}"
+    )
     documents, _ = search_documents(
         db=db,
         tenant_id=user_context.tenant_id,
@@ -104,6 +125,10 @@ def search_documents_endpoint(
         for document in documents
         if can_read_document(user_context=user_context, document=document)
     ]
+    logger.info(
+        f"[DocumentAPI] Search documents returned {len(readable_documents)} readable "
+        f"items for tenant={user_context.tenant_id}"
+    )
 
     return DocumentSearchResponse(
         items=[
@@ -124,18 +149,30 @@ def get_document_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:read")),
 ) -> DocumentRead:
+    logger.info(
+        f"[DocumentAPI] Get document requested id={document_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
     document = get_document(
         db=db,
         id=document_id,
         tenant_id=user_context.tenant_id,
     )
     if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for "
+            f"tenant={user_context.tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
     require_document_permission(
         user_context=user_context,
         document=document,
         action=PermissionAction.READ,
+    )
+    logger.info(
+        f"[DocumentAPI] Get document allowed id={document_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
     )
     return DocumentRead.model_validate(document)
 
@@ -147,12 +184,20 @@ def update_document_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:write")),
 ) -> DocumentRead:
+    logger.info(
+        f"[DocumentAPI] Update document requested id={document_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
     document = get_document(
         db=db,
         id=document_id,
         tenant_id=user_context.tenant_id,
     )
     if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for update "
+            f"tenant={user_context.tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
     require_document_permission(
@@ -161,6 +206,9 @@ def update_document_endpoint(
         action=PermissionAction.WRITE,
     )
     updated_document = update_document(db=db, db_obj=document, obj_in=payload)
+    logger.info(
+        f"[DocumentAPI] Updated document {document_id} tenant={user_context.tenant_id}"
+    )
     return DocumentRead.model_validate(updated_document)
 
 
@@ -170,12 +218,20 @@ def delete_document_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:delete")),
 ) -> DocumentActionResponse:
+    logger.info(
+        f"[DocumentAPI] Delete document requested id={document_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
     document = get_document(
         db=db,
         id=document_id,
         tenant_id=user_context.tenant_id,
     )
     if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for delete "
+            f"tenant={user_context.tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
     require_document_permission(
@@ -184,6 +240,9 @@ def delete_document_endpoint(
         action=PermissionAction.DELETE,
     )
     delete_document(db=db, id=document_id, tenant_id=user_context.tenant_id)
+    logger.info(
+        f"[DocumentAPI] Deleted document {document_id} tenant={user_context.tenant_id}"
+    )
     return DocumentActionResponse(id=document_id, status="deleted")
 
 
@@ -193,6 +252,10 @@ def restore_document_endpoint(
     db: Session = Depends(get_session),
     user_context: UserContext = Depends(require_scope("documents:write")),
 ) -> DocumentRead:
+    logger.info(
+        f"[DocumentAPI] Restore document requested id={document_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
     document = get_document(
         db=db,
         id=document_id,
@@ -200,8 +263,16 @@ def restore_document_endpoint(
         include_deleted=True,
     )
     if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for restore "
+            f"tenant={user_context.tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
     if not document.is_deleted:
+        logger.info(
+            f"[DocumentAPI] Restore skipped for active document {document_id} "
+            f"tenant={user_context.tenant_id}"
+        )
         return DocumentRead.model_validate(document)
 
     require_document_permission(
@@ -215,6 +286,13 @@ def restore_document_endpoint(
         tenant_id=user_context.tenant_id,
     )
     if not restored_document:
+        logger.warning(
+            f"[DocumentAPI] Restore failed because document {document_id} was not found "
+            f"tenant={user_context.tenant_id}"
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
+    logger.info(
+        f"[DocumentAPI] Restored document {document_id} tenant={user_context.tenant_id}"
+    )
     return DocumentRead.model_validate(restored_document)
