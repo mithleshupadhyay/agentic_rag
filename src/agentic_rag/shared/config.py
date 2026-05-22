@@ -5,9 +5,28 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    auth_provider: str = Field(default="keycloak", validation_alias="AUTH_PROVIDER")
     app_name: str = Field(default="Agentic RAG", validation_alias="APP_NAME")
     app_version: str = Field(default="0.1.0", validation_alias="APP_VERSION")
     allowed_origins_csv: str = Field(default="*", validation_alias="ALLOWED_ORIGINS")
+    oidc_issuer_url: str = Field(default="", validation_alias="OIDC_ISSUER_URL")
+    oidc_audience: str = Field(default="", validation_alias="OIDC_AUDIENCE")
+    oidc_jwks_url: str = Field(default="", validation_alias="OIDC_JWKS_URL")
+    database_url: str = Field(
+        default="postgresql+asyncpg://agentic_rag:agentic_rag@localhost:5432/agentic_rag",
+        validation_alias="DATABASE_URL",
+    )
+    database_echo: bool = Field(default=False, validation_alias="DATABASE_ECHO")
+    database_pool_size: int = Field(
+        default=10,
+        ge=1,
+        validation_alias="DATABASE_POOL_SIZE",
+    )
+    database_max_overflow: int = Field(
+        default=20,
+        ge=0,
+        validation_alias="DATABASE_MAX_OVERFLOW",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -19,6 +38,22 @@ class Settings(BaseSettings):
             if origin.strip()
         ]
 
+    @property
+    def sync_database_url(self) -> str:
+        if self.database_url.startswith("postgresql+asyncpg://"):
+            return self.database_url.replace(
+                "postgresql+asyncpg://",
+                "postgresql+psycopg://",
+                1,
+            )
+        if self.database_url.startswith("sqlite+aiosqlite://"):
+            return self.database_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
+        return self.database_url
+
+    @property
+    def is_sqlite_database(self) -> bool:
+        return self.database_url.startswith(("sqlite://", "sqlite+aiosqlite://"))
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -26,4 +61,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
