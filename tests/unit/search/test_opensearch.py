@@ -91,6 +91,7 @@ def test_build_chunk_search_document_includes_tenant_acl_and_content(db: Session
     assert payload["chunk_id"] == str(chunk.id)
     assert payload["content"] == "Security policy content for BM25 indexing."
     assert payload["document_title"] == "Security Guide"
+    assert payload["owner_user_id"] == "user-1"
     assert payload["file_name"] == "security.md"
     assert payload["visibility"] == Visibility.GROUP
     assert payload["allowed_group_ids"] == ["security"]
@@ -129,3 +130,52 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
 
     assert indexed_count == 1
     assert [request.method for request in requests] == ["GET", "PUT", "POST"]
+
+
+def test_opensearch_client_searches_bm25_chunks() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST" and request.url.path == "/chunks-test/_search":
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["query"]["bool"]["filter"][0]["term"]["tenant_id"] == "tenant-a"
+            return httpx.Response(
+                200,
+                json={
+                    "hits": {
+                        "hits": [
+                            {
+                                "_score": 2.5,
+                                "_source": {
+                                    "chunk_id": "00000000-0000-0000-0000-000000000001",
+                                },
+                            }
+                        ]
+                    }
+                },
+                request=request,
+            )
+        return httpx.Response(500, request=request)
+
+    client = OpenSearchClient(
+        base_url="http://opensearch:9200",
+        username="",
+        password="",
+        index_name="chunks-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    hits = client.search_chunks_bm25(
+        {
+            "query": {
+                "bool": {
+                    "filter": [{"term": {"tenant_id": "tenant-a"}}],
+                }
+            }
+        }
+    )
+    client.close()
+
+    assert hits[0]["_score"] == 2.5
+    assert [request.method for request in requests] == ["POST"]

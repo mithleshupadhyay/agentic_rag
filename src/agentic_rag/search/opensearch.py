@@ -29,6 +29,7 @@ def build_chunk_search_document(chunk: DocumentChunk) -> dict[str, Any]:
         "start_offset": chunk.start_offset,
         "end_offset": chunk.end_offset,
         "document_title": document.title if document else None,
+        "owner_user_id": document.owner_user_id if document else None,
         "file_name": document.file_name if document else None,
         "source_type": document.source_type if document else None,
         "source_uri": document.source_uri if document else None,
@@ -106,6 +107,7 @@ class OpenSearchClient:
                     "start_offset": {"type": "integer"},
                     "end_offset": {"type": "integer"},
                     "document_title": {"type": "text"},
+                    "owner_user_id": {"type": "keyword"},
                     "file_name": {
                         "type": "text",
                         "fields": {"keyword": {"type": "keyword"}},
@@ -161,3 +163,17 @@ class OpenSearchClient:
 
         logger.info(f"[OpenSearch] Bulk indexed {len(chunks)} chunks index={index_name}")
         return len(chunks)
+
+    def search_chunks_bm25(
+        self,
+        search_body: dict[str, Any],
+        index_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        index_name = index_name or self.index_name
+        logger.info(f"[OpenSearch] Searching BM25 chunks index={index_name}")
+        response = self.client.post(f"/{index_name}/_search", json=search_body)
+        response.raise_for_status()
+        response_data = response.json()
+        hits = response_data.get("hits", {}).get("hits", [])
+        logger.info(f"[OpenSearch] BM25 search returned {len(hits)} chunks")
+        return hits
