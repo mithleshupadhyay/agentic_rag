@@ -51,6 +51,21 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias="DOCUMENT_UPLOAD_MAX_BYTES",
     )
+    ingestion_worker_poll_seconds: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="INGESTION_WORKER_POLL_SECONDS",
+    )
+    ingestion_chunk_size: int = Field(
+        default=2000,
+        ge=100,
+        validation_alias="INGESTION_CHUNK_SIZE",
+    )
+    ingestion_chunk_overlap: int = Field(
+        default=200,
+        ge=0,
+        validation_alias="INGESTION_CHUNK_OVERLAP",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

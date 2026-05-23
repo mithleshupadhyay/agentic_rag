@@ -33,6 +33,30 @@ services:
       - dbnet
       - storagenet
 
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      target: runtime
+    container_name: agentic-rag-ingestion-worker
+    command: ["python", "-m", "agentic_rag.workers.ingestion"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *api-environment
+    depends_on:
+      db-seed:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - dbnet
+      - storagenet
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: agentic-rag-postgres
