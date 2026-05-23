@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import (
+    attach_document_object,
     create_document,
+    create_ingestion_job_for_document,
     delete_document,
     get_document,
     list_documents,
@@ -94,6 +96,55 @@ def test_create_document_persists_metadata_and_acl(db: Session) -> None:
     assert document.acl.visibility == Visibility.GROUP
     assert document.acl.allowed_group_ids == ["security"]
     assert document.acl.acl_version == 2
+
+
+def test_attach_document_object_and_create_ingestion_job(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+    )
+    document = create_document(
+        user_context=user_context,
+        db=db,
+        obj_in=DocumentCreateRequest(
+            source_type=DocumentSourceType.UPLOAD,
+            title="Uploaded policy",
+            file=FileMetadata(
+                file_name="policy.txt",
+                mime_type="text/plain",
+                byte_size=12,
+                content_hash="hash-1",
+            ),
+            metadata={},
+            acl=AclPolicy(),
+        ),
+    )
+
+    document = attach_document_object(
+        db=db,
+        db_obj=document,
+        object_key="tenants/tenant-a/workspaces/workspace-a/documents/raw/policy.txt",
+    )
+    ingestion_job = create_ingestion_job_for_document(
+        user_context=user_context,
+        db=db,
+        document=document,
+        idempotency_key="upload-policy-1",
+        metadata={"content_hash": "hash-1"},
+    )
+
+    assert document.object_key == "tenants/tenant-a/workspaces/workspace-a/documents/raw/policy.txt"
+    assert document.status == DocumentStatus.QUEUED
+    assert ingestion_job.tenant_id == "tenant-a"
+    assert ingestion_job.workspace_id == "workspace-a"
+    assert ingestion_job.document_id == document.id
+    assert ingestion_job.object_key == document.object_key
+    assert ingestion_job.status == "queued"
+    assert ingestion_job.current_stage == "created"
+    assert ingestion_job.metadata_["content_hash"] == "hash-1"
 
 
 def test_get_and_list_documents_are_tenant_scoped(db: Session) -> None:

@@ -41,6 +41,7 @@ COPY --from=builder /usr/local /usr/local
 COPY --chown=appuser:appuser alembic.ini ./
 COPY --chown=appuser:appuser alembic ./alembic
 COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser scripts ./scripts
 
 USER appuser
 

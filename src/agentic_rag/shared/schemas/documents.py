@@ -111,3 +111,14 @@ class DocumentSearchResponse(APIModel):
 class DocumentActionResponse(APIModel):
     id: UUID
     status: str = Field(..., min_length=1)
+
+
+class DocumentUploadResponse(APIModel):
+    document: DocumentRead
+    ingestion_job_id: UUID
+    ingestion_status: str = Field(..., min_length=1)
+    ingestion_stage: str = Field(..., min_length=1)
+    bucket: str = Field(..., min_length=1)
+    object_key: str = Field(..., min_length=1)
+    content_hash: str = Field(..., min_length=1)
+    byte_size: int = Field(..., ge=0)

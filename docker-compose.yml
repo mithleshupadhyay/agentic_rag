@@ -17,7 +17,7 @@ services:
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
-      db-migrate:
+      db-seed:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
@@ -97,6 +97,25 @@ services:
       <<: *api-environment
     depends_on:
       postgres-init:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - dbnet
+
+  db-seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      target: runtime
+    container_name: agentic-rag-db-seed
+    command: ["python", "scripts/seed_local_db.py"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *api-environment
+    depends_on:
+      db-migrate:
         condition: service_completed_successfully
     restart: "no"
     networks:

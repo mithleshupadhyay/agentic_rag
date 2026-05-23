@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query, Session, noload, selectinload
 
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.shared.db.models import Document, DocumentAcl, DocumentChunk
+from agentic_rag.shared.db.models import Document, DocumentAcl, DocumentChunk, IngestionJob
 from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
     DocumentSearchRequest,
@@ -81,6 +81,100 @@ def create_document(
         raise HTTPException(
             status_code=400,
             detail="Database error during document creation.",
+        )
+
+
+def attach_document_object(
+    db: Session,
+    db_obj: Document,
+    object_key: str,
+) -> Document:
+    logger.info(f"[DB] Attaching object key to document {db_obj.id}")
+    db_obj.object_key = object_key
+    db_obj.status = "queued"
+
+    try:
+        db.commit()
+        db.refresh(db_obj)
+        _ = db_obj.acl
+        logger.info(f"[DB] Attached object key to document {db_obj.id}")
+        return db_obj
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to attach object key to document {db_obj.id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during document object update.",
+        )
+
+
+def mark_document_failed(
+    db: Session,
+    db_obj: Document,
+) -> Document:
+    logger.warning(f"[DB] Marking document {db_obj.id} as failed")
+    db_obj.status = "failed"
+
+    try:
+        db.commit()
+        db.refresh(db_obj)
+        _ = db_obj.acl
+        logger.info(f"[DB] Marked document {db_obj.id} as failed")
+        return db_obj
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to mark document {db_obj.id} as failed: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during document status update.",
+        )
+
+
+def create_ingestion_job_for_document(
+    user_context: UserContext,
+    db: Session,
+    document: Document,
+    idempotency_key: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> IngestionJob:
+    try:
+        logger.info(
+            f"[DB] Creating ingestion job document={document.id} "
+            f"tenant={user_context.tenant_id}"
+        )
+        db_obj = IngestionJob(
+            tenant_id=user_context.tenant_id,
+            workspace_id=document.workspace_id,
+            document_id=document.id,
+            source_type=document.source_type,
+            source_uri=document.source_uri,
+            object_key=document.object_key,
+            status="queued",
+            current_stage="created",
+            retry_count=0,
+            max_retries=3,
+            idempotency_key=idempotency_key,
+            metadata_=metadata or {},
+            created_by=user_context.id,
+        )
+
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        logger.info(
+            f"[DB] Created ingestion job {db_obj.id} document={document.id} "
+            f"tenant={db_obj.tenant_id}"
+        )
+        return db_obj
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to create ingestion job for document {document.id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during ingestion job creation.",
         )
 
 

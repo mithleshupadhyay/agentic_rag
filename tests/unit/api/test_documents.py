@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -123,6 +124,51 @@ def create_document_payload(
     }
 
 
+class FakeObjectStore:
+    def __init__(self):
+        self.uploads = []
+        self.deleted = []
+
+    def build_object_key(
+        self,
+        tenant_id: str,
+        workspace_id: str | None,
+        document_id,
+        file_name: str,
+    ) -> str:
+        workspace = workspace_id or "default"
+        return (
+            f"tenants/{tenant_id}/workspaces/{workspace}/"
+            f"documents/{document_id}/raw/{file_name}"
+        )
+
+    def put_bytes(
+        self,
+        object_key: str,
+        data: bytes,
+        content_type: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> dict:
+        self.uploads.append(
+            {
+                "object_key": object_key,
+                "data": data,
+                "content_type": content_type,
+                "metadata": metadata,
+            }
+        )
+        return {
+            "bucket": "agentic-rag-test",
+            "object_key": object_key,
+            "byte_size": len(data),
+            "content_hash": "cc1e6f388e7836a3dcd07341509c3afa63759a3ca7e3fbbc4233f6ec64d85dec",
+            "etag": '"etag-1"',
+        }
+
+    def delete_object(self, object_key: str) -> None:
+        self.deleted.append(object_key)
+
+
 def test_create_document_endpoint_returns_document(client: TestClient) -> None:
     response = client.post(
         "/documents",
@@ -135,6 +181,84 @@ def test_create_document_endpoint_returns_document(client: TestClient) -> None:
     assert body["owner_user_id"] == "owner-1"
     assert body["title"] == "Security Policy"
     assert body["metadata"]["department"] == "security"
+
+
+def test_upload_document_endpoint_stores_object_and_creates_ingestion_job(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+        data={
+            "workspace_id": "workspace-a",
+            "title": "Uploaded Security Policy",
+            "metadata_json": '{"department": "security"}',
+            "idempotency_key": "upload-security-1",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["bucket"] == "agentic-rag-test"
+    assert body["object_key"] == fake_store.uploads[0]["object_key"]
+    assert body["byte_size"] == len(b"security policy")
+    assert body["ingestion_status"] == "queued"
+    assert body["ingestion_stage"] == "created"
+    assert body["document"]["tenant_id"] == "tenant-a"
+    assert body["document"]["workspace_id"] == "workspace-a"
+    assert body["document"]["title"] == "Uploaded Security Policy"
+    assert body["document"]["file_name"] == "security.txt"
+    assert body["document"]["object_key"] == body["object_key"]
+    assert body["document"]["metadata"]["department"] == "security"
+    assert fake_store.uploads[0]["content_type"] == "text/plain"
+    assert fake_store.uploads[0]["metadata"]["tenant_id"] == "tenant-a"
+    assert fake_store.uploads[0]["metadata"]["document_id"] == body["document"]["id"]
+
+
+def test_upload_document_endpoint_rejects_invalid_metadata(client: TestClient) -> None:
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+        data={"metadata_json": "[]"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "metadata_json must be a valid JSON object."
+
+
+def test_upload_document_endpoint_deletes_object_when_job_creation_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+
+    def fail_create_ingestion_job_for_document(*args, **kwargs):
+        raise HTTPException(status_code=400, detail="Failed to create ingestion job.")
+
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.create_ingestion_job_for_document",
+        fail_create_ingestion_job_for_document,
+    )
+
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Failed to create ingestion job."
+    assert fake_store.deleted == [fake_store.uploads[0]["object_key"]]
 
 
 def test_create_document_endpoint_requires_write_scope(client: TestClient) -> None:

@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     )
     s3_bucket_name: str = Field(default="agentic-rag", validation_alias="S3_BUCKET_NAME")
     s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
+    document_upload_max_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        ge=1,
+        validation_alias="DOCUMENT_UPLOAD_MAX_BYTES",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
