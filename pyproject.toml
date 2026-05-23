@@ -19,6 +19,7 @@ asyncpg = "^0.31.0"
 psycopg = {extras = ["binary"], version = "^3.3.4"}
 pgvector = "^0.4.2"
 python-jose = {extras = ["cryptography"], version = "^3.5.0"}
+boto3 = "^1.43.14"
 
 
 [tool.poetry.group.dev.dependencies]

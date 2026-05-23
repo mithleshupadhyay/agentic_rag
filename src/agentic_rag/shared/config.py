@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias="DATABASE_MAX_OVERFLOW",
     )
+    s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
+    s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: str = Field(
+        default="agentic_rag_password",
+        validation_alias="S3_SECRET_ACCESS_KEY",
+    )
+    s3_bucket_name: str = Field(default="agentic-rag", validation_alias="S3_BUCKET_NAME")
+    s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
