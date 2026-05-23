@@ -66,6 +66,46 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias="INGESTION_CHUNK_OVERLAP",
     )
+    opensearch_url: str = Field(
+        default="http://localhost:9200",
+        validation_alias="OPENSEARCH_URL",
+    )
+    opensearch_username: str = Field(default="", validation_alias="OPENSEARCH_USERNAME")
+    opensearch_password: str = Field(default="", validation_alias="OPENSEARCH_PASSWORD")
+    opensearch_document_index: str = Field(
+        default="documents-v1",
+        validation_alias="OPENSEARCH_DOCUMENT_INDEX",
+    )
+    opensearch_chunk_index: str = Field(
+        default="chunks-v1",
+        validation_alias="OPENSEARCH_CHUNK_INDEX",
+    )
+    opensearch_request_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        validation_alias="OPENSEARCH_REQUEST_TIMEOUT_SECONDS",
+    )
+    opensearch_index_shards: int = Field(
+        default=1,
+        ge=1,
+        validation_alias="OPENSEARCH_INDEX_SHARDS",
+    )
+    opensearch_index_replicas: int = Field(
+        default=0,
+        ge=0,
+        validation_alias="OPENSEARCH_INDEX_REPLICAS",
+    )
+    indexing_worker_poll_seconds: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="INDEXING_WORKER_POLL_SECONDS",
+    )
+    bm25_index_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        validation_alias="BM25_INDEX_BATCH_SIZE",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

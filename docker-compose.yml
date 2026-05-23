@@ -1,6 +1,7 @@
 x-api-environment: &api-environment
   DATABASE_URL: ${DOCKER_DATABASE_URL}
   S3_ENDPOINT_URL: ${DOCKER_S3_ENDPOINT_URL}
+  OPENSEARCH_URL: ${DOCKER_OPENSEARCH_URL}
 
 services:
   api:
@@ -32,6 +33,7 @@ services:
       - appnet
       - dbnet
       - storagenet
+      - searchnet
 
   ingestion-worker:
     build:
@@ -56,6 +58,30 @@ services:
     networks:
       - dbnet
       - storagenet
+
+  indexing-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      target: runtime
+    container_name: agentic-rag-indexing-worker
+    command: ["python", "-m", "agentic_rag.workers.indexing"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *api-environment
+    depends_on:
+      db-seed:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - dbnet
+      - searchnet
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -186,13 +212,45 @@ services:
     networks:
       - storagenet
 
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: agentic-rag-opensearch
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: ${OPENSEARCH_DISABLE_SECURITY_PLUGIN:-true}
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - searchnet
+
 networks:
   appnet:
   dbnet:
   storagenet:
+  searchnet:
 
 volumes:
   postgres_data:
     driver: local
   minio_data:
+    driver: local
+  opensearch_data:
     driver: local

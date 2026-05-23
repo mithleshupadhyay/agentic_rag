@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
-from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentic_rag.shared.db.base import (
@@ -130,6 +131,17 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         default="internal",
         server_default="internal",
     )
+    bm25_index_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    bm25_index_name: Mapped[str | None] = mapped_column(String(256), index=True)
+    bm25_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bm25_index_content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    bm25_index_error: Mapped[str | None] = mapped_column(Text)
 
     document = relationship("Document", back_populates="chunks", lazy="select")
     acl = relationship(
@@ -156,6 +168,8 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_document_chunks_tenant_hash", "tenant_id", "content_hash"),
         Index("ix_document_chunks_tenant_acl_version", "tenant_id", "acl_version"),
         Index("ix_document_chunks_tenant_deleted", "tenant_id", "is_deleted"),
+        Index("ix_document_chunks_tenant_bm25_status", "tenant_id", "bm25_index_status"),
+        Index("ix_document_chunks_tenant_bm25_index", "tenant_id", "bm25_index_name"),
     )
 
 
