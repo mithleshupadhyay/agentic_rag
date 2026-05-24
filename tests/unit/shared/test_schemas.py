@@ -115,6 +115,12 @@ def test_query_response_contract() -> None:
     assert response.context == []
     assert response.context_token_count == 0
     assert response.synthesis_enabled is False
+    assert response.llm_provider is None
+    assert response.llm_model is None
+    assert response.llm_input_tokens == 0
+    assert response.llm_output_tokens == 0
+    assert response.llm_cost_estimate == 0.0
+    assert response.synthesis_error is None
 
 
 def test_query_request_defaults() -> None:

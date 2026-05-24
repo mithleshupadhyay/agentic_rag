@@ -106,6 +106,43 @@ class Settings(BaseSettings):
         le=1000,
         validation_alias="BM25_INDEX_BATCH_SIZE",
     )
+    llm_synthesis_enabled: bool = Field(
+        default=False,
+        validation_alias="LLM_SYNTHESIS_ENABLED",
+    )
+    llm_provider: str = Field(default="litellm", validation_alias="LLM_PROVIDER")
+    default_llm_model: str = Field(
+        default="ollama/llama3.1",
+        validation_alias="DEFAULT_LLM_MODEL",
+    )
+    default_small_model: str = Field(
+        default="ollama/llama3.1",
+        validation_alias="DEFAULT_SMALL_MODEL",
+    )
+    llm_api_key: str = Field(default="", validation_alias="LLM_API_KEY")
+    litellm_base_url: str = Field(default="", validation_alias="LITELLM_BASE_URL")
+    litellm_api_key: str = Field(default="", validation_alias="LITELLM_API_KEY")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias="OLLAMA_BASE_URL",
+    )
+    llm_temperature: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=2.0,
+        validation_alias="LLM_TEMPERATURE",
+    )
+    llm_max_tokens: int = Field(
+        default=700,
+        ge=1,
+        le=8000,
+        validation_alias="LLM_MAX_TOKENS",
+    )
+    llm_timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        validation_alias="LLM_TIMEOUT_SECONDS",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

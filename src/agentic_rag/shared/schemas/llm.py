@@ -61,6 +61,21 @@ class LLMResponse(APIModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class LLMMessage(APIModel):
+    role: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1)
+
+
+class ChatCompletionRequest(APIModel):
+    messages: list[LLMMessage] = Field(..., min_length=1)
+    model: str | None = None
+    provider: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1)
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
 class EmbeddingRequest(APIModel):
     auth: AuthContext
     texts: list[str] = Field(..., min_length=1)
@@ -82,4 +97,3 @@ class BudgetDecision(APIModel):
     remaining_budget: float | None = Field(default=None, ge=0.0)
     reset_at: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-

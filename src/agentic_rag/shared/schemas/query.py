@@ -51,6 +51,12 @@ class QueryResponse(APIModel):
     retrieval_strategy: RetrievalStrategy
     latency_ms: int = Field(..., ge=0)
     synthesis_enabled: bool = False
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_input_tokens: int = Field(default=0, ge=0)
+    llm_output_tokens: int = Field(default=0, ge=0)
+    llm_cost_estimate: float = Field(default=0.0, ge=0.0)
+    synthesis_error: str | None = None
 
 
 class QueryRunStatus(StrEnum):

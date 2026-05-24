@@ -610,9 +610,9 @@ Endpoints:
 POST /query
 ```
 
-The first implementation is retrieval-only. It calls BM25 retrieval, builds a
-safe context with citations, and returns grounded context output before any LLM
-synthesis is enabled.
+The query flow is retrieval-first. It calls BM25 retrieval, builds a safe
+authorized context with citations, and optionally sends only that sanitized
+context to the LLM gateway when `LLM_SYNTHESIS_ENABLED=true`.
 
 Request:
 
@@ -642,6 +642,12 @@ class QueryResponse(BaseModel):
     retrieval_strategy: str
     latency_ms: int
     synthesis_enabled: bool
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cost_estimate: float = 0.0
+    synthesis_error: str | None = None
 ```
 
 Future query endpoints:
@@ -752,6 +758,25 @@ Responsibilities:
 - Count tokens and cost.
 - Apply retries and circuit breakers.
 - Redact sensitive logs.
+- Never receive raw unauthorized chunks; answer generation must use the
+  sanitized context returned by retrieval and context building.
+
+Current local implementation:
+
+```text
+src/agentic_rag/llm/gateway.py
+```
+
+Configuration:
+
+```text
+LLM_SYNTHESIS_ENABLED=false
+LLM_PROVIDER=litellm
+DEFAULT_LLM_MODEL=ollama/llama3.1
+LLM_TEMPERATURE=0.1
+LLM_MAX_TOKENS=700
+LLM_TIMEOUT_SECONDS=30
+```
 
 ### AuthZ Service
 

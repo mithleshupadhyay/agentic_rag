@@ -6,7 +6,7 @@ authors = ["Mithlesh Upadhyay <mithleshupadhyay515@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.12,<3.14"
 fastapi = "^0.136.1"
 uvicorn = {extras = ["standard"], version = "^0.47.0"}
 pydantic-settings = "^2.14.1"
@@ -22,6 +22,7 @@ python-jose = {extras = ["cryptography"], version = "^3.5.0"}
 boto3 = "^1.43.14"
 httpx = "^0.28.1"
 python-multipart = "^0.0.29"
+litellm = "^1.86.0"
 
 
 [tool.poetry.group.dev.dependencies]
