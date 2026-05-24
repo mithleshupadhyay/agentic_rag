@@ -607,11 +607,12 @@ Gateway routes user-facing endpoints to internal services.
 Endpoints:
 
 ```text
-POST /v1/query
-POST /v1/query/stream
-GET  /v1/query/{agent_run_id}
-GET  /v1/query/{agent_run_id}/steps
+POST /query
 ```
+
+The first implementation is retrieval-only. It calls BM25 retrieval, builds a
+safe context with citations, and returns grounded context output before any LLM
+synthesis is enabled.
 
 Request:
 
@@ -620,9 +621,11 @@ class QueryRequest(BaseModel):
     query: str
     workspace_id: str | None = None
     conversation_id: str | None = None
-    filters: dict[str, Any] = {}
+    filters: RetrievalFilters = RetrievalFilters()
     stream: bool = False
+    retrieval_limit: int = 20
     max_context_chunks: int = 12
+    max_context_tokens: int = 6000
 ```
 
 Response:
@@ -632,9 +635,21 @@ class QueryResponse(BaseModel):
     agent_run_id: UUID
     answer: str
     citations: list[Citation]
+    candidates: list[CandidateChunk]
+    context: list[ContextChunk]
+    context_token_count: int
     confidence_score: float
     retrieval_strategy: str
     latency_ms: int
+    synthesis_enabled: bool
+```
+
+Future query endpoints:
+
+```text
+POST /query/stream
+GET  /query/{agent_run_id}
+GET  /query/{agent_run_id}/steps
 ```
 
 ### Ingestion API

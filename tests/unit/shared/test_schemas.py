@@ -111,12 +111,18 @@ def test_query_response_contract() -> None:
 
     assert response.citations[0].document_id == document_id
     assert response.retrieval_strategy == RetrievalStrategy.HYBRID
+    assert response.candidates == []
+    assert response.context == []
+    assert response.context_token_count == 0
+    assert response.synthesis_enabled is False
 
 
 def test_query_request_defaults() -> None:
     request = QueryRequest(query="Find PCI documents")
 
+    assert request.retrieval_limit == 20
     assert request.max_context_chunks == 12
+    assert request.max_context_tokens == 6000
     assert request.filters.document_ids == []
 
 
