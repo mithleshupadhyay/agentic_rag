@@ -20,6 +20,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint. | Add request ID middleware, structured access logging, OpenTelemetry setup, graceful startup/shutdown checks, and explicit router inclusion for ingestion/query/admin endpoints. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints. | Add streaming file upload, object-store write, ingestion job creation, idempotency key handling, upload size limits, MIME validation, and status endpoints. | High |
+| `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoint for BM25 search. | Add vector-search, hybrid-search, rerank, context-build endpoints, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -32,8 +33,12 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/acl.py` | Document and chunk ACL models. | Add policy versioning, inherited ACLs, group expansion snapshots, deny rules, and efficient indexes for retrieval-time chunk filtering. | High |
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model. | Add stage timestamps, worker lease fields, retry backoff fields, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD. | Add chunk CRUD, bulk chunk insert, bulk status updates, idempotent create-by-hash, pagination counts, lock-safe job updates, and retrieval-facing list queries. | High |
+| `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas. | Add parser, metadata, chunking, embedding, indexing, retry, DLQ, and audit events with schema versioning and idempotency fields. | High |
+| `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
+| `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
+| `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -47,12 +52,17 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/schemas/evaluation.py` | Evaluation schemas. | Add retrieval evaluation, answer faithfulness, citation accuracy, latency, cost, and regression test result schemas. | Medium |
 | `tests/unit/api/test_documents.py` | Document API tests. | Add upload endpoint tests, authorization edge cases, ingestion job creation tests, and large file validation tests. | High |
 | `tests/unit/api/test_health.py` | Health API tests. | Add readiness dependency status tests and degraded/unhealthy response tests. | Medium |
+| `tests/unit/api/test_retrieval.py` | Retrieval API tests. | Add error mapping, empty-result behavior, mocked OpenSearch failures, and integration smoke tests for `/retrieval/bm25-search`. | High |
 | `tests/unit/core/test_auth.py` | Auth tests. | Add OIDC JWKS cache tests, invalid issuer/audience tests, tenant claim mapping tests, and scope mapping tests. | High |
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
+| `tests/unit/shared/db/test_indexing_crud.py` | BM25 indexing CRUD tests. | Add retry selection, failed-index recovery, tenant batching, and stale index-name/hash transition tests. | Medium |
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
+| `tests/unit/search/test_opensearch.py` | OpenSearch client tests. | Add partial bulk failure handling, search error handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
+| `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests. | Add score threshold, metadata/date filters, no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
 | `tests/unit/storage/test_object_store.py` | Object storage tests. | Add mocked error handling tests, metadata tests, streaming upload tests, and local MinIO integration tests later. | Medium |
+| `tests/unit/workers/test_indexing.py` | BM25 indexing worker tests. | Add retry/DLQ, worker loop shutdown, batch sizing, and per-tenant selection tests. | Medium |
 
 ## Recommended Next Implementation Order
 
@@ -63,6 +73,9 @@ retrieval quality, and production operations.
 | 3 | Add parser and chunking worker contract with Kafka event schemas. |
 | 4 | Add chunk CRUD with bulk insert and chunk-level ACL persistence. |
 | 5 | Add OpenSearch indexing client and BM25 indexing worker. |
-| 6 | Add selective embedding worker with pgvector writes. |
-| 7 | Add retrieval service functions: metadata search, BM25 search, vector search, merge, ACL filter, rerank, context build. |
-| 8 | Add query API and agent runtime skeleton with max steps, max tool calls, timeout, checkpointing, and loop protection. |
+| 6 | Add context builder for retrieved chunks with token budget, citations, deduplication, and safe truncation. |
+| 7 | Add query API that calls BM25 retrieval and context builder, but returns grounded retrieval output before LLM synthesis. |
+| 8 | Add LLM gateway integration with provider/model env selection, budgets, retries, and citation-aware answer synthesis. |
+| 9 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
+| 10 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
+| 11 | Add agent runtime skeleton with max steps, max tool calls, timeout, checkpointing, and loop protection. |

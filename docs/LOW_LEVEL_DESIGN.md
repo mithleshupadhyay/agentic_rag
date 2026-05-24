@@ -675,26 +675,33 @@ class IngestionJobResponse(BaseModel):
 
 ### Retrieval Service
 
-Internal endpoints:
+Current API endpoint:
 
 ```text
-POST /internal/v1/retrieval/metadata
-POST /internal/v1/retrieval/bm25
-POST /internal/v1/retrieval/vector
-POST /internal/v1/retrieval/hybrid
-POST /internal/v1/retrieval/rerank
-POST /internal/v1/retrieval/context
+POST /retrieval/bm25-search
 ```
 
-All requests must include tenant and ACL context.
+The API request body must not include tenant or ACL context. The endpoint gets
+`UserContext` from auth dependencies and the retrieval layer converts it into
+tenant, workspace, ACL, deny-rule, and visibility filters before OpenSearch is
+called.
 
 ```python
-class RetrievalRequest(BaseModel):
-    auth: AuthContext
+class BM25SearchRequest(BaseModel):
     query: str
-    filters: dict[str, Any] = {}
+    filters: RetrievalFilters = RetrievalFilters()
     limit: int = 20
     deadline_ms: int = 1500
+```
+
+Future internal retrieval endpoints:
+
+```text
+POST /internal/v1/retrieval/metadata-search
+POST /internal/v1/retrieval/vector-search
+POST /internal/v1/retrieval/hybrid-search
+POST /internal/v1/retrieval/rerank
+POST /internal/v1/retrieval/context-build
 ```
 
 ### Agent Runtime Service
@@ -949,12 +956,16 @@ tenant_id
 workspace_id
 document_id
 chunk_id
+owner_user_id
 content
 metadata
 acl_version
+visibility
 allowed_user_ids
 allowed_group_ids
 allowed_roles
+denied_user_ids
+denied_group_ids
 classification_level
 ```
 
