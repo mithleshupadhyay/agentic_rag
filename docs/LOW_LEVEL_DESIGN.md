@@ -990,12 +990,13 @@ For large tenants, use table partitioning and indexes by tenant and model.
 
 Responsibilities:
 
-- Remove duplicate chunks by `content_hash`.
-- Keep only authorized chunks.
+- Remove duplicate chunks by chunk ID and repeated cleaned content.
+- Strip OpenSearch highlight markup before building LLM context.
+- Work only on already authorized retrieval candidates.
 - Preserve citation metadata.
 - Respect token budget.
-- Compress long chunks when needed.
-- Group adjacent chunks from the same document.
+- Truncate oversized chunks when needed.
+- Keep the output ready for grounded answer synthesis.
 
 ## Testing Design
 
