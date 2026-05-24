@@ -40,6 +40,13 @@ class RetrievalRequest(APIModel):
     deadline_ms: int = Field(default=1500, ge=100)
 
 
+class BM25SearchRequest(APIModel):
+    query: str = Field(..., min_length=1)
+    filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
+    limit: int = Field(default=20, ge=1, le=200)
+    deadline_ms: int = Field(default=1500, ge=100)
+
+
 class CandidateDocument(APIModel):
     document_id: UUID
     score: float = Field(..., ge=0.0)
@@ -93,4 +100,3 @@ class ContextBuildRequest(APIModel):
 class ContextBuildResponse(APIModel):
     context: list[ContextChunk]
     token_count: int = Field(..., ge=0)
-

@@ -19,6 +19,7 @@ from agentic_rag.shared.schemas.documents import (
 )
 from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse
 from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
+from agentic_rag.shared.schemas.retrieval import BM25SearchRequest
 
 
 def test_health_response_contract() -> None:
@@ -117,6 +118,14 @@ def test_query_request_defaults() -> None:
 
     assert request.max_context_chunks == 12
     assert request.filters.document_ids == []
+
+
+def test_bm25_search_request_defaults() -> None:
+    request = BM25SearchRequest(query="Find PCI documents")
+
+    assert request.limit == 20
+    assert request.filters.document_ids == []
+    assert request.deadline_ms == 1500
 
 
 def test_agent_limits_validation() -> None:
