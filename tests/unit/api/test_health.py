@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -63,3 +64,20 @@ def test_request_id_header_preserves_client_value() -> None:
 
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "request-id-from-client"
+
+
+def test_request_logs_include_request_id_and_duration(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="agentic_rag.main")
+
+    response = client.get(
+        "/health",
+        headers={"X-Request-ID": "request-id-from-log-test"},
+    )
+
+    assert response.status_code == 200
+    assert "Started request_id=request-id-from-log-test" in caplog.text
+    assert "Completed request_id=request-id-from-log-test" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "path=/health" in caplog.text
+    assert "status_code=200" in caplog.text
+    assert "duration_ms=" in caplog.text

@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ app.add_middleware(
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or str(uuid4())
     request.state.request_id = request_id
+    started_at = time.perf_counter()
 
     logger.info(
         f"[Request] Started request_id={request_id} "
@@ -46,10 +48,11 @@ async def request_id_middleware(request: Request, call_next):
     )
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
     logger.info(
         f"[Request] Completed request_id={request_id} "
         f"method={request.method} path={request.url.path} "
-        f"status_code={response.status_code}"
+        f"status_code={response.status_code} duration_ms={duration_ms}"
     )
     return response
 
