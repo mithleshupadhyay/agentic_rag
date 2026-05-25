@@ -17,11 +17,11 @@ retrieval quality, and production operations.
 | `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, MinIO, OpenSearch, migrations, seed, ingestion worker, and indexing worker. | Add Redis and Kafka when queue-backed workers are implemented; add profiles for lightweight API-only and full ingestion stacks. | High |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
 | `Makefile` | Provides repeatable validation and Docker commands. | Add migration, local smoke test, Docker smoke test, and service-specific worker commands as the stack grows. | Medium |
-| `src/agentic_rag/main.py` | Main FastAPI app entrypoint. | Add request ID middleware, structured access logging, OpenTelemetry setup, graceful startup/shutdown checks, and explicit router inclusion for ingestion/query/admin endpoints. | High |
+| `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add structured access logging, OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, and ingestion job creation. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoint for BM25 search. | Add vector-search, hybrid-search, rerank, context-build endpoints, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch. | High |
-| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, and persisted query-run lookup/listing. | Add streaming query support, request IDs, answer verification, richer status filtering, and OpenAPI examples for query-run responses. | High |
+| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, and persisted query-run lookup/listing. | Add streaming query support, persisted request IDs on query runs, answer verification, richer status filtering, and OpenAPI examples for query-run responses. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -79,13 +79,13 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query request IDs, structured query logs, and query-level latency/cost accounting. |
-| 2 | Add LLM budget enforcement, retry policy, circuit breaker handling, and provider health checks. |
-| 3 | Add answer-support verification before returning synthesized answers. |
-| 4 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
-| 5 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
-| 6 | Add reranker integration and retrieval quality scoring. |
-| 7 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
-| 8 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
-| 9 | Add streaming query responses and query-run cancellation. |
+| 1 | Persist request IDs on query runs and expose request-id filtering for admin/debug flows. |
+| 2 | Add query-level latency/cost accounting hardening and structured access logs. |
+| 3 | Add LLM budget enforcement, retry policy, circuit breaker handling, and provider health checks. |
+| 4 | Add answer-support verification before returning synthesized answers. |
+| 5 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
+| 6 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
+| 7 | Add reranker integration and retrieval quality scoring. |
+| 8 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
+| 9 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 10 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |

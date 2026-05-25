@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.dependencies import require_scope
@@ -28,13 +28,15 @@ router = APIRouter(tags=["query"])
 
 @router.post("/query", response_model=QueryResponse)
 def query_endpoint(
+    request: Request,
     payload: QueryRequest,
     user_context: UserContext = Depends(require_scope("query:run")),
     db: Session = Depends(get_session),
 ) -> QueryResponse:
+    request_id = getattr(request.state, "request_id", None)
     logger.info(
         f"[QueryAPI] Query started tenant={user_context.tenant_id} "
-        f"user={user_context.id}"
+        f"user={user_context.id} request_id={request_id}"
     )
 
     response = run_bm25_query(
@@ -45,7 +47,8 @@ def query_endpoint(
 
     logger.info(
         f"[QueryAPI] Query completed tenant={user_context.tenant_id} "
-        f"user={user_context.id} context_chunks={len(response.context)}"
+        f"user={user_context.id} request_id={request_id} "
+        f"context_chunks={len(response.context)}"
     )
     return response
 

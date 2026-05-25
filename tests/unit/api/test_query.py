@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from uuid import uuid4
 
@@ -67,7 +68,7 @@ def create_test_db() -> Session:
     return session
 
 
-def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch) -> None:
+def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch, caplog) -> None:
     document_id = uuid4()
     chunk_id = uuid4()
     user_context = UserContext(
@@ -115,9 +116,11 @@ def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch) -> None:
         fake_run_bm25_query,
     )
 
+    caplog.set_level(logging.INFO, logger="agentic_rag.api.query")
     for client in client_with_user(user_context):
         response = client.post(
             "/query",
+            headers={"X-Request-ID": "query-request-id"},
             json={
                 "query": "security policy",
                 "workspace_id": "workspace-a",
@@ -139,6 +142,8 @@ def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch) -> None:
     assert captured["request"].workspace_id == "workspace-a"
     assert captured["request"].retrieval_limit == 8
     assert captured["db"] is not None
+    assert response.headers["X-Request-ID"] == "query-request-id"
+    assert "request_id=query-request-id" in caplog.text
 
 
 def test_query_endpoint_requires_query_scope() -> None:

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi.testclient import TestClient
 
 from agentic_rag.main import app
@@ -43,3 +45,21 @@ def test_openapi_has_bearer_auth() -> None:
         "scheme": "bearer",
         "bearerFormat": "JWT",
     }
+
+
+def test_request_id_header_is_generated() -> None:
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"]
+    UUID(response.headers["X-Request-ID"])
+
+
+def test_request_id_header_preserves_client_value() -> None:
+    response = client.get(
+        "/health",
+        headers={"X-Request-ID": "request-id-from-client"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "request-id-from-client"

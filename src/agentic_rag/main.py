@@ -1,7 +1,9 @@
+import logging
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -12,6 +14,7 @@ from agentic_rag.shared.config import settings
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.app_name,
@@ -28,7 +31,28 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    request.state.request_id = request_id
+
+    logger.info(
+        f"[Request] Started request_id={request_id} "
+        f"method={request.method} path={request.url.path}"
+    )
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        f"[Request] Completed request_id={request_id} "
+        f"method={request.method} path={request.url.path} "
+        f"status_code={response.status_code}"
+    )
+    return response
+
 
 app.include_router(health.router)
 app.include_router(documents.router)
