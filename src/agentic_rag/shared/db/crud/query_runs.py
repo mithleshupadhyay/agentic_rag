@@ -86,15 +86,15 @@ def mark_query_run_completed(
     query_run.candidates = {"items": response_payload.get("candidates", [])}
     query_run.context = {"items": response_payload.get("context", [])}
     query_run.response_payload = response_payload
-    query_run.context_token_count = response.context_token_count
+    query_run.context_token_count = max(response.context_token_count, 0)
     query_run.confidence_score = response.confidence_score
-    query_run.latency_ms = response.latency_ms
+    query_run.latency_ms = max(response.latency_ms, 0)
     query_run.synthesis_enabled = response.synthesis_enabled
     query_run.llm_provider = response.llm_provider
     query_run.llm_model = response.llm_model
-    query_run.llm_input_tokens = response.llm_input_tokens
-    query_run.llm_output_tokens = response.llm_output_tokens
-    query_run.llm_cost_estimate = response.llm_cost_estimate
+    query_run.llm_input_tokens = max(response.llm_input_tokens, 0)
+    query_run.llm_output_tokens = max(response.llm_output_tokens, 0)
+    query_run.llm_cost_estimate = max(response.llm_cost_estimate, 0.0)
     query_run.error_type = None
     query_run.error_message = response.synthesis_error
     query_run.completed_at = datetime.now(timezone.utc)
@@ -126,7 +126,7 @@ def mark_query_run_failed(
     query_run.status = QueryRunStatus.FAILED.value
     query_run.error_type = error_type[:128]
     query_run.error_message = error_message
-    query_run.latency_ms = latency_ms
+    query_run.latency_ms = max(latency_ms or 0, 0)
     query_run.completed_at = datetime.now(timezone.utc)
 
     try:

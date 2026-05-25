@@ -36,12 +36,12 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model. | Add stage timestamps, worker lease fields, retry backoff fields, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
-| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
+| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas. | Add parser, metadata, chunking, embedding, indexing, retry, DLQ, and audit events with schema versioning and idempotency fields. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat gateway used for grounded answer synthesis. | Add budget enforcement, retries, circuit breaker handling, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
-| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, answer verification, request ID propagation, and stronger fallback handling. | High |
+| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, answer verification, and stronger fallback handling. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
@@ -64,12 +64,12 @@ retrieval quality, and production operations.
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
 | `tests/unit/shared/db/test_indexing_crud.py` | BM25 indexing CRUD tests. | Add retry selection, failed-index recovery, tenant batching, and stale index-name/hash transition tests. | Medium |
-| `tests/unit/shared/db/test_query_runs_crud.py` | Query run CRUD tests for create, complete, fail, fetch, list, tenant scope, and rollback behavior. | Add status/date filtering, cancellation, request ID lookup, and retention cleanup tests. | Medium |
+| `tests/unit/shared/db/test_query_runs_crud.py` | Query run CRUD tests for create, complete, fail, fetch, list, tenant scope, metric defaults, and rollback behavior. | Add status/date filtering, cancellation, request ID lookup, and retention cleanup tests. | Medium |
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
 | `tests/unit/search/test_opensearch.py` | OpenSearch client tests. | Add partial bulk failure handling, search error handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
 | `tests/unit/llm/test_gateway.py` | LLM gateway unit tests. | Add provider-specific mocked cases, timeout/retry/circuit-breaker tests, budget rejection tests, and no-secret logging tests. | High |
-| `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs. | Add cache/fallback, answer verification, request ID propagation, synthesis handoff edge cases, and no-result response behavior tests. | High |
+| `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs and metric accounting. | Add cache/fallback, answer verification, synthesis handoff edge cases, and no-result response behavior tests. | High |
 | `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests. | Add score threshold, metadata/date filters, no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
 | `tests/unit/retrieval/test_context_builder.py` | Context builder tests. | Add adjacent chunk grouping, stronger truncation edge cases, per-document caps, and citation ordering tests. | High |
 | `tests/unit/storage/test_object_store.py` | Object storage tests. | Add mocked error handling tests, metadata tests, streaming upload tests, and local MinIO integration tests later. | Medium |
@@ -79,7 +79,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query-level latency/cost accounting hardening and structured access logs. |
+| 1 | Add structured access logs with request duration and request ID fields. |
 | 2 | Add LLM budget enforcement, retry policy, circuit breaker handling, and provider health checks. |
 | 3 | Add answer-support verification before returning synthesized answers. |
 | 4 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |

@@ -271,6 +271,10 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
 
     assert response.synthesis_enabled is False
     assert response.synthesis_error == "LLM synthesis failed"
+    assert response.latency_ms >= 0
+    assert response.llm_input_tokens == 0
+    assert response.llm_output_tokens == 0
+    assert response.llm_cost_estimate == 0.0
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert "answer synthesis failed" in response.answer
@@ -342,6 +346,12 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.user_id == "user-1"
         assert query_run.request_id == "request-id-1"
         assert query_run.answer == response.answer
+        assert query_run.latency_ms is not None
+        assert query_run.latency_ms >= 0
+        assert query_run.context_token_count == response.context_token_count
+        assert query_run.llm_input_tokens == 0
+        assert query_run.llm_output_tokens == 0
+        assert query_run.llm_cost_estimate == 0.0
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.citations["items"][0]["title"] == "Security Policy"
 
@@ -388,4 +398,9 @@ def test_run_bm25_query_marks_query_run_failed(monkeypatch) -> None:
         assert query_run.request_id == "request-id-failed"
         assert query_run.error_type == "RuntimeError"
         assert query_run.error_message == "search backend unavailable"
+        assert query_run.latency_ms is not None
+        assert query_run.latency_ms >= 0
+        assert query_run.llm_input_tokens == 0
+        assert query_run.llm_output_tokens == 0
+        assert query_run.llm_cost_estimate == 0.0
         assert query_run.completed_at is not None

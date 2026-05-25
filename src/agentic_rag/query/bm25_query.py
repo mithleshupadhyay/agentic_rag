@@ -162,7 +162,7 @@ def run_bm25_query(
             except Exception as e:
                 logger.exception(
                     f"[Query] LLM synthesis failed tenant={user_context.tenant_id} "
-                    f"user={user_context.id}: {e}"
+                    f"user={user_context.id} request_id={request_id}: {e}"
                 )
                 answer = (
                     "Retrieved context for this query, but answer synthesis failed. "
@@ -170,7 +170,7 @@ def run_bm25_query(
                 )
                 synthesis_error = "LLM synthesis failed"
 
-        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
 
         logger.info(
             f"[Query] BM25 query completed tenant={user_context.tenant_id} "
@@ -206,6 +206,7 @@ def run_bm25_query(
         return response
 
     except Exception as e:
+        latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
         if db is not None and query_run is not None:
             try:
                 mark_query_run_failed(
@@ -213,7 +214,7 @@ def run_bm25_query(
                     query_run=query_run,
                     error_type=type(e).__name__,
                     error_message=str(e),
-                    latency_ms=int((time.perf_counter() - started_at) * 1000),
+                    latency_ms=latency_ms,
                 )
             except Exception as update_error:
                 logger.exception(

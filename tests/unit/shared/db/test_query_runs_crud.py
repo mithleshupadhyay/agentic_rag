@@ -107,6 +107,11 @@ def test_create_and_complete_query_run(db: Session) -> None:
     assert completed.answer == "Security policy content [1]."
     assert completed.citations["items"][0]["title"] == "Security Policy"
     assert completed.response_payload["agent_run_id"] == str(agent_run_id)
+    assert completed.latency_ms == 25
+    assert completed.context_token_count == 3
+    assert completed.llm_input_tokens == 100
+    assert completed.llm_output_tokens == 12
+    assert completed.llm_cost_estimate == 0.001
     assert completed.llm_model == "gemini/gemini-2.0-flash"
     assert completed.completed_at is not None
 
@@ -139,6 +144,35 @@ def test_mark_query_run_failed(db: Session) -> None:
     assert failed.error_message == "retrieval failed"
     assert failed.latency_ms == 13
     assert failed.completed_at is not None
+
+
+def test_mark_query_run_failed_defaults_missing_latency_to_zero(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    agent_run_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    query_run = create_query_run(
+        user_context=user_context,
+        db=db,
+        request=QueryRequest(query="security policy"),
+        agent_run_id=agent_run_id,
+    )
+
+    failed = mark_query_run_failed(
+        db=db,
+        query_run=query_run,
+        error_type="RuntimeError",
+        error_message="retrieval failed",
+    )
+
+    assert failed.status == QueryRunStatus.FAILED
+    assert failed.latency_ms == 0
+    assert failed.llm_input_tokens == 0
+    assert failed.llm_output_tokens == 0
+    assert failed.llm_cost_estimate == 0.0
 
 
 def test_get_and_list_query_runs_are_tenant_scoped(db: Session) -> None:
