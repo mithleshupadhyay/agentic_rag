@@ -43,6 +43,11 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="tenant",
         lazy="selectin",
     )
+    query_runs = relationship(
+        "QueryRun",
+        back_populates="tenant",
+        lazy="selectin",
+    )
 
     __table_args__ = (
         Index("ix_tenants_status_region", "status", "data_region"),

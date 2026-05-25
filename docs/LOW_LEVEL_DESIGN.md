@@ -420,6 +420,39 @@ ingestion_jobs
 - created_at
 - updated_at
 
+query_runs
+- id
+- tenant_id
+- workspace_id
+- user_id
+- conversation_id
+- query_text
+- filters
+- status
+- retrieval_strategy
+- answer
+- citations
+- candidates
+- context
+- response_payload
+- retrieval_limit
+- max_context_chunks
+- max_context_tokens
+- context_token_count
+- confidence_score
+- latency_ms
+- synthesis_enabled
+- llm_provider
+- llm_model
+- llm_input_tokens
+- llm_output_tokens
+- llm_cost_estimate
+- error_type
+- error_message
+- completed_at
+- created_at
+- updated_at
+
 agent_runs
 - id
 - tenant_id
@@ -608,11 +641,16 @@ Endpoints:
 
 ```text
 POST /query
+GET  /query
+GET  /query/{agent_run_id}
 ```
 
 The query flow is retrieval-first. It calls BM25 retrieval, builds a safe
 authorized context with citations, and optionally sends only that sanitized
-context to the LLM gateway when `LLM_SYNTHESIS_ENABLED=true`.
+context to the LLM gateway when `LLM_SYNTHESIS_ENABLED=true`. Every query run is
+persisted tenant-scoped before retrieval starts, then marked completed or failed
+with latency, retrieval strategy, context summary, citations, LLM provider/model,
+token counts, cost estimate, and the final response payload.
 
 Request:
 
@@ -650,11 +688,23 @@ class QueryResponse(BaseModel):
     synthesis_error: str | None = None
 ```
 
+Query run endpoints:
+
+```text
+GET /query
+- Lists persisted query runs for the current tenant.
+- Non-admin users only see their own runs.
+- Workspace-bound users only see their workspace.
+
+GET /query/{agent_run_id}
+- Returns one tenant-scoped query run by run id.
+- Enforces workspace and owner access before returning the stored response.
+```
+
 Future query endpoints:
 
 ```text
 POST /query/stream
-GET  /query/{agent_run_id}
 GET  /query/{agent_run_id}/steps
 ```
 

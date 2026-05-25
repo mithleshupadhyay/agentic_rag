@@ -2,9 +2,13 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.query.bm25_query import run_bm25_query
+from agentic_rag.shared.db.base import Base
+from agentic_rag.shared.db.models import QueryRun, Tenant
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.llm import LLMResponse
 from agentic_rag.shared.schemas.query import QueryRequest
@@ -270,3 +274,114 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert "answer synthesis failed" in response.answer
+
+
+def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    document_id = uuid4()
+    chunk_id = uuid4()
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Security policy content.",
+                    score=2.3,
+                    source=RetrievalTool.BM25_SEARCH,
+                    metadata={"token_count": 3},
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=2.3,
+                    ),
+                )
+            ],
+            latency_ms=11,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+        )
+
+        response = run_bm25_query(
+            user_context=user_context,
+            request=QueryRequest(query="security policy", workspace_id="workspace-a"),
+            db=db,
+        )
+        query_run = db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
+
+        assert query_run.status == "completed"
+        assert query_run.tenant_id == "tenant-a"
+        assert query_run.workspace_id == "workspace-a"
+        assert query_run.user_id == "user-1"
+        assert query_run.answer == response.answer
+        assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
+        assert query_run.citations["items"][0]["title"] == "Security Policy"
+
+
+def test_run_bm25_query_marks_query_run_failed(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        raise RuntimeError("search backend unavailable")
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+        )
+
+        with pytest.raises(RuntimeError):
+            run_bm25_query(
+                user_context=user_context,
+                request=QueryRequest(query="security policy"),
+                db=db,
+            )
+
+        query_run = db.query(QueryRun).one()
+        assert query_run.status == "failed"
+        assert query_run.error_type == "RuntimeError"
+        assert query_run.error_message == "search backend unavailable"
+        assert query_run.completed_at is not None

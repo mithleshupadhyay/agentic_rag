@@ -11,6 +11,7 @@ from agentic_rag.shared.db.models import (
     DocumentAcl,
     DocumentChunk,
     IngestionJob,
+    QueryRun,
     Tenant,
     User,
 )
@@ -40,6 +41,7 @@ def test_metadata_contains_core_tables() -> None:
         "chunk_acl",
         "chunk_embeddings",
         "ingestion_jobs",
+        "query_runs",
     }
 
     assert expected_tables.issubset(Base.metadata.tables)
@@ -53,6 +55,7 @@ def test_models_create_sqlite_schema_for_unit_tests() -> None:
     assert "documents" in inspect(engine).get_table_names()
     assert "document_chunks" in inspect(engine).get_table_names()
     assert "ingestion_jobs" in inspect(engine).get_table_names()
+    assert "query_runs" in inspect(engine).get_table_names()
 
 
 def test_seed_local_development_data_creates_tenant_and_user(
@@ -161,6 +164,28 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
             max_retries=3,
             metadata_={},
         )
+        query_run = QueryRun(
+            tenant_id="tenant-a",
+            workspace_id=None,
+            user_id="user-1",
+            query_text="What does the policy say?",
+            filters={},
+            status="completed",
+            retrieval_strategy="bm25",
+            answer="Only authorized users can read this policy.",
+            citations={"items": []},
+            candidates={"items": []},
+            context={"items": []},
+            response_payload={},
+            retrieval_limit=20,
+            max_context_chunks=12,
+            max_context_tokens=6000,
+            context_token_count=8,
+            synthesis_enabled=False,
+            llm_input_tokens=0,
+            llm_output_tokens=0,
+            llm_cost_estimate=0.0,
+        )
 
         session.add_all(
             [
@@ -171,6 +196,7 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
                 document_acl,
                 chunk_acl,
                 ingestion_job,
+                query_run,
             ]
         )
         session.commit()
@@ -180,3 +206,4 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
         assert stored_document.tenant_id == "tenant-a"
         assert stored_document.chunks[0].acl.allowed_group_ids == ["security"]
         assert stored_document.ingestion_jobs[0].status == "completed"
+        assert session.scalars(select(QueryRun)).one().tenant_id == "tenant-a"

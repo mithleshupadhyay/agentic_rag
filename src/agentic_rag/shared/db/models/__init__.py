@@ -5,6 +5,7 @@ from agentic_rag.shared.db.models.documents import (
     DocumentChunk,
 )
 from agentic_rag.shared.db.models.ingestion_jobs import IngestionJob
+from agentic_rag.shared.db.models.query_runs import QueryRun
 from agentic_rag.shared.db.models.tenants import (
     Group,
     Role,
@@ -22,6 +23,7 @@ __all__ = [
     "DocumentChunk",
     "Group",
     "IngestionJob",
+    "QueryRun",
     "Role",
     "Tenant",
     "User",
