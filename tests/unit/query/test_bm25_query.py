@@ -332,6 +332,7 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
             user_context=user_context,
             request=QueryRequest(query="security policy", workspace_id="workspace-a"),
             db=db,
+            request_id="request-id-1",
         )
         query_run = db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
 
@@ -339,6 +340,7 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.tenant_id == "tenant-a"
         assert query_run.workspace_id == "workspace-a"
         assert query_run.user_id == "user-1"
+        assert query_run.request_id == "request-id-1"
         assert query_run.answer == response.answer
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.citations["items"][0]["title"] == "Security Policy"
@@ -378,10 +380,12 @@ def test_run_bm25_query_marks_query_run_failed(monkeypatch) -> None:
                 user_context=user_context,
                 request=QueryRequest(query="security policy"),
                 db=db,
+                request_id="request-id-failed",
             )
 
         query_run = db.query(QueryRun).one()
         assert query_run.status == "failed"
+        assert query_run.request_id == "request-id-failed"
         assert query_run.error_type == "RuntimeError"
         assert query_run.error_message == "search backend unavailable"
         assert query_run.completed_at is not None

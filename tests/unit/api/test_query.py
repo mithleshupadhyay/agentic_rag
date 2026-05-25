@@ -80,10 +80,11 @@ def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch, caplog) -
     )
     captured = {}
 
-    def fake_run_bm25_query(user_context, request, db):
+    def fake_run_bm25_query(user_context, request, db, request_id):
         captured["user_context"] = user_context
         captured["request"] = request
         captured["db"] = db
+        captured["request_id"] = request_id
         citation = Citation(
             document_id=document_id,
             chunk_id=chunk_id,
@@ -142,6 +143,7 @@ def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch, caplog) -
     assert captured["request"].workspace_id == "workspace-a"
     assert captured["request"].retrieval_limit == 8
     assert captured["db"] is not None
+    assert captured["request_id"] == "query-request-id"
     assert response.headers["X-Request-ID"] == "query-request-id"
     assert "request_id=query-request-id" in caplog.text
 
@@ -202,6 +204,7 @@ def test_get_query_run_endpoint_returns_persisted_response() -> None:
             db=db,
             request=QueryRequest(query="security policy", workspace_id="workspace-a"),
             agent_run_id=agent_run_id,
+            request_id="request-id-1",
         )
         citation = Citation(
             document_id=document_id,
@@ -234,6 +237,7 @@ def test_get_query_run_endpoint_returns_persisted_response() -> None:
         assert body["status"] == "completed"
         assert body["tenant_id"] == "tenant-a"
         assert body["workspace_id"] == "workspace-a"
+        assert body["request_id"] == "request-id-1"
         assert body["answer"] == "Security policy content [1]."
         assert body["response"]["answer"] == "Security policy content [1]."
         assert body["citations"][0]["title"] == "Security Policy"
@@ -295,16 +299,18 @@ def test_list_query_run_endpoint_returns_only_current_user_runs() -> None:
             db=db,
             request=QueryRequest(query="my query", workspace_id="workspace-a"),
             agent_run_id=uuid4(),
+            request_id="request-id-1",
         )
         create_query_run(
             user_context=other_context,
             db=db,
             request=QueryRequest(query="other query", workspace_id="workspace-a"),
             agent_run_id=uuid4(),
+            request_id="request-id-2",
         )
 
         for client in client_with_user(user_context, db):
-            response = client.get("/query?page=1&size=20")
+            response = client.get("/query?page=1&size=20&request_id=request-id-1")
 
         assert response.status_code == 200
         body = response.json()
@@ -312,5 +318,6 @@ def test_list_query_run_endpoint_returns_only_current_user_runs() -> None:
         assert len(body["items"]) == 1
         assert body["items"][0]["query"] == "my query"
         assert body["items"][0]["user_id"] == "user-1"
+        assert body["items"][0]["request_id"] == "request-id-1"
     finally:
         db.close()

@@ -73,6 +73,7 @@ class QueryRunRead(APIModel):
     tenant_id: str
     workspace_id: str | None = None
     user_id: str
+    request_id: str | None = None
     conversation_id: str | None = None
     query: str
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
@@ -105,6 +106,7 @@ class QueryRunListItem(APIModel):
     status: QueryRunStatus
     workspace_id: str | None = None
     user_id: str
+    request_id: str | None = None
     conversation_id: str | None = None
     query: str
     retrieval_strategy: RetrievalStrategy | None = None

@@ -25,6 +25,7 @@ class QueryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
     user_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), index=True)
     conversation_id: Mapped[str | None] = mapped_column(String(256), index=True)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     filters: Mapped[JsonDict] = mapped_column(
@@ -113,6 +114,7 @@ class QueryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __table_args__ = (
         Index("ix_query_runs_tenant_status", "tenant_id", "status"),
+        Index("ix_query_runs_tenant_request_id", "tenant_id", "request_id"),
         Index("ix_query_runs_tenant_user_created", "tenant_id", "user_id", "created_at"),
         Index("ix_query_runs_tenant_workspace_created", "tenant_id", "workspace_id", "created_at"),
         Index("ix_query_runs_tenant_conversation", "tenant_id", "conversation_id"),

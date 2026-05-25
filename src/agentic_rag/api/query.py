@@ -43,6 +43,7 @@ def query_endpoint(
         user_context=user_context,
         request=payload,
         db=db,
+        request_id=request_id,
     )
 
     logger.info(
@@ -59,6 +60,7 @@ def list_query_run_endpoint(
     size: int = 50,
     workspace_id: str | None = None,
     user_id: str | None = None,
+    request_id: str | None = None,
     user_context: UserContext = Depends(require_scope("query:run")),
     db: Session = Depends(get_session),
 ) -> QueryRunSearchResponse:
@@ -69,7 +71,7 @@ def list_query_run_endpoint(
 
     logger.info(
         f"[QueryAPI] Listing query runs tenant={user_context.tenant_id} "
-        f"user={user_context.id} page={page} size={size}"
+        f"user={user_context.id} page={page} size={size} request_id={request_id}"
     )
     effective_workspace_id = workspace_id
     if user_context.workspace_id:
@@ -99,6 +101,7 @@ def list_query_run_endpoint(
         limit=size,
         workspace_id=effective_workspace_id,
         user_id=effective_user_id,
+        request_id=request_id,
     )
     logger.info(
         f"[QueryAPI] Listed {len(query_runs)} query runs tenant={user_context.tenant_id} "
@@ -111,6 +114,7 @@ def list_query_run_endpoint(
                 status=QueryRunStatus(query_run.status),
                 workspace_id=query_run.workspace_id,
                 user_id=query_run.user_id,
+                request_id=query_run.request_id,
                 conversation_id=query_run.conversation_id,
                 query=query_run.query_text,
                 retrieval_strategy=(
@@ -182,6 +186,7 @@ def get_query_run_endpoint(
         tenant_id=query_run.tenant_id,
         workspace_id=query_run.workspace_id,
         user_id=query_run.user_id,
+        request_id=query_run.request_id,
         conversation_id=query_run.conversation_id,
         query=query_run.query_text,
         filters=RetrievalFilters.model_validate(query_run.filters),

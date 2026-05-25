@@ -27,10 +27,12 @@ def run_bm25_query(
     user_context: UserContext,
     request: QueryRequest,
     db: Session | None = None,
+    request_id: str | None = None,
 ) -> QueryResponse:
     logger.info(
         f"[Query] BM25 query started tenant={user_context.tenant_id} "
-        f"user={user_context.id} retrieval_limit={request.retrieval_limit}"
+        f"user={user_context.id} request_id={request_id} "
+        f"retrieval_limit={request.retrieval_limit}"
     )
     started_at = time.perf_counter()
 
@@ -59,6 +61,7 @@ def run_bm25_query(
             db=db,
             request=request,
             agent_run_id=agent_run_id,
+            request_id=request_id,
         )
 
     try:
@@ -171,7 +174,8 @@ def run_bm25_query(
 
         logger.info(
             f"[Query] BM25 query completed tenant={user_context.tenant_id} "
-            f"user={user_context.id} candidates={len(retrieval_response.candidates)} "
+            f"user={user_context.id} request_id={request_id} "
+            f"candidates={len(retrieval_response.candidates)} "
             f"context_chunks={len(context_response.context)} synthesis_enabled={synthesis_enabled} "
             f"latency_ms={latency_ms}"
         )

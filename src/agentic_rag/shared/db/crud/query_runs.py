@@ -21,10 +21,11 @@ def create_query_run(
     db: Session,
     request: QueryRequest,
     agent_run_id: UUID,
+    request_id: Optional[str] = None,
 ) -> QueryRun:
     logger.info(
         f"[DB] Creating query run {agent_run_id} tenant={user_context.tenant_id} "
-        f"user={user_context.id}"
+        f"user={user_context.id} request_id={request_id}"
     )
 
     try:
@@ -33,6 +34,7 @@ def create_query_run(
             tenant_id=user_context.tenant_id,
             workspace_id=request.workspace_id or user_context.workspace_id,
             user_id=user_context.id,
+            request_id=request_id,
             conversation_id=request.conversation_id,
             query_text=request.query.strip(),
             filters=request.filters.model_dump(mode="json"),
@@ -170,10 +172,11 @@ def list_query_runs(
     limit: int = 50,
     workspace_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> tuple[list[QueryRun], int]:
     logger.info(
         f"[DB] Listing query runs tenant={tenant_id} skip={skip} limit={limit} "
-        f"workspace_id={workspace_id} user_id={user_id}"
+        f"workspace_id={workspace_id} user_id={user_id} request_id={request_id}"
     )
     query = db.query(QueryRun).filter(QueryRun.tenant_id == tenant_id)
 
@@ -181,6 +184,8 @@ def list_query_runs(
         query = query.filter(QueryRun.workspace_id == workspace_id)
     if user_id:
         query = query.filter(QueryRun.user_id == user_id)
+    if request_id:
+        query = query.filter(QueryRun.request_id == request_id)
 
     total = query.order_by(None).count()
     query_runs = (

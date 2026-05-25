@@ -21,7 +21,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, and ingestion job creation. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoint for BM25 search. | Add vector-search, hybrid-search, rerank, context-build endpoints, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch. | High |
-| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, and persisted query-run lookup/listing. | Add streaming query support, persisted request IDs on query runs, answer verification, richer status filtering, and OpenAPI examples for query-run responses. | High |
+| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, and persisted query-run lookup/listing. | Add streaming query support, answer verification, richer status filtering, and OpenAPI examples for query-run responses. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -31,12 +31,12 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/session.py` | Database engine/session management. | Add pool tuning, health check helper, transaction utilities, sync/async separation policy, and production retry guidance. | High |
 | `src/agentic_rag/shared/db/models/tenants.py` | Tenant model. | Add tenant status transitions, plan/quota fields, data region enforcement, retention policy, encryption policy, and tenant-level settings. | High |
 | `src/agentic_rag/shared/db/models/documents.py` | Document, chunk, and embedding models with BM25 indexing status fields. | Add embedding job status, vector version strategy, parent-child chunk support, and partition/index review for very large tables. | High |
-| `src/agentic_rag/shared/db/models/query_runs.py` | Tenant-scoped persisted query run model for retrieval status, answer payload, citations, LLM tokens, cost estimate, and failures. | Add request ID, cache metadata, budget decision metadata, verification status, step summary, retention policy, and partition/index review for high-volume query history. | High |
+| `src/agentic_rag/shared/db/models/query_runs.py` | Tenant-scoped persisted query run model for request ID, retrieval status, answer payload, citations, LLM tokens, cost estimate, and failures. | Add cache metadata, budget decision metadata, verification status, step summary, retention policy, and partition/index review for high-volume query history. | High |
 | `src/agentic_rag/shared/db/models/acl.py` | Document and chunk ACL models. | Add policy versioning, inherited ACLs, group expansion snapshots, deny rules, and efficient indexes for retrieval-time chunk filtering. | High |
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model. | Add stage timestamps, worker lease fields, retry backoff fields, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
-| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, and listing helpers. | Add status filtering, date filtering, request ID lookup, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
+| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas. | Add parser, metadata, chunking, embedding, indexing, retry, DLQ, and audit events with schema versioning and idempotency fields. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
@@ -79,13 +79,13 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Persist request IDs on query runs and expose request-id filtering for admin/debug flows. |
-| 2 | Add query-level latency/cost accounting hardening and structured access logs. |
-| 3 | Add LLM budget enforcement, retry policy, circuit breaker handling, and provider health checks. |
-| 4 | Add answer-support verification before returning synthesized answers. |
-| 5 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
-| 6 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
-| 7 | Add reranker integration and retrieval quality scoring. |
-| 8 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
-| 9 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
+| 1 | Add query-level latency/cost accounting hardening and structured access logs. |
+| 2 | Add LLM budget enforcement, retry policy, circuit breaker handling, and provider health checks. |
+| 3 | Add answer-support verification before returning synthesized answers. |
+| 4 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
+| 5 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
+| 6 | Add reranker integration and retrieval quality scoring. |
+| 7 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
+| 8 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
+| 9 | Add streaming query responses and query-run cancellation. |
 | 10 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |

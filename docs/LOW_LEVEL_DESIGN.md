@@ -425,6 +425,7 @@ query_runs
 - tenant_id
 - workspace_id
 - user_id
+- request_id
 - conversation_id
 - query_text
 - filters

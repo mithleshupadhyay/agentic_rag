@@ -17,7 +17,13 @@ from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
     DocumentSourceType,
 )
-from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse
+from agentic_rag.shared.schemas.query import (
+    QueryRequest,
+    QueryResponse,
+    QueryRunListItem,
+    QueryRunRead,
+    QueryRunStatus,
+)
 from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
 from agentic_rag.shared.schemas.retrieval import BM25SearchRequest
 
@@ -121,6 +127,32 @@ def test_query_response_contract() -> None:
     assert response.llm_output_tokens == 0
     assert response.llm_cost_estimate == 0.0
     assert response.synthesis_error is None
+
+
+def test_query_run_response_models_include_request_id() -> None:
+    now = datetime.now(timezone.utc)
+    agent_run_id = uuid4()
+    read_model = QueryRunRead(
+        agent_run_id=agent_run_id,
+        status=QueryRunStatus.COMPLETED,
+        tenant_id="tenant-a",
+        user_id="user-1",
+        request_id="request-id-1",
+        query="Find policy",
+        created_at=now,
+        updated_at=now,
+    )
+    list_item = QueryRunListItem(
+        agent_run_id=agent_run_id,
+        status=QueryRunStatus.COMPLETED,
+        user_id="user-1",
+        request_id="request-id-1",
+        query="Find policy",
+        created_at=now,
+    )
+
+    assert read_model.request_id == "request-id-1"
+    assert list_item.request_id == "request-id-1"
 
 
 def test_query_request_defaults() -> None:

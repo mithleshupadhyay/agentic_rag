@@ -168,6 +168,7 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
             tenant_id="tenant-a",
             workspace_id=None,
             user_id="user-1",
+            request_id="request-id-1",
             query_text="What does the policy say?",
             filters={},
             status="completed",
@@ -206,4 +207,6 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
         assert stored_document.tenant_id == "tenant-a"
         assert stored_document.chunks[0].acl.allowed_group_ids == ["security"]
         assert stored_document.ingestion_jobs[0].status == "completed"
-        assert session.scalars(select(QueryRun)).one().tenant_id == "tenant-a"
+        stored_query_run = session.scalars(select(QueryRun)).one()
+        assert stored_query_run.tenant_id == "tenant-a"
+        assert stored_query_run.request_id == "request-id-1"

@@ -67,6 +67,7 @@ def test_create_and_complete_query_run(db: Session) -> None:
         db=db,
         request=request,
         agent_run_id=agent_run_id,
+        request_id="request-id-1",
     )
     citation = Citation(
         document_id=document_id,
@@ -100,6 +101,7 @@ def test_create_and_complete_query_run(db: Session) -> None:
     assert completed.tenant_id == "tenant-a"
     assert completed.workspace_id == "workspace-a"
     assert completed.user_id == "user-1"
+    assert completed.request_id == "request-id-1"
     assert completed.query_text == "security policy"
     assert completed.retrieval_limit == 5
     assert completed.answer == "Security policy content [1]."
@@ -157,12 +159,14 @@ def test_get_and_list_query_runs_are_tenant_scoped(db: Session) -> None:
         db=db,
         request=QueryRequest(query="tenant a query"),
         agent_run_id=uuid4(),
+        request_id="tenant-a-request",
     )
     create_query_run(
         user_context=tenant_b_context,
         db=db,
         request=QueryRequest(query="tenant b query"),
         agent_run_id=uuid4(),
+        request_id="tenant-b-request",
     )
 
     assert get_query_run(db, tenant_a_run.id, "tenant-a") is not None
@@ -175,6 +179,15 @@ def test_get_and_list_query_runs_are_tenant_scoped(db: Session) -> None:
     assert tenant_b_total == 1
     assert [query_run.query_text for query_run in tenant_a_runs] == ["tenant a query"]
     assert [query_run.query_text for query_run in tenant_b_runs] == ["tenant b query"]
+
+    filtered_runs, filtered_total = list_query_runs(
+        db,
+        "tenant-a",
+        request_id="tenant-a-request",
+    )
+
+    assert filtered_total == 1
+    assert filtered_runs[0].id == tenant_a_run.id
 
 
 def test_create_query_run_rolls_back_on_integrity_error(db: Session) -> None:
