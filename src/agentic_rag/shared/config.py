@@ -106,6 +106,48 @@ class Settings(BaseSettings):
         le=1000,
         validation_alias="BM25_INDEX_BATCH_SIZE",
     )
+    embedding_provider: str = Field(default="litellm", validation_alias="EMBEDDING_PROVIDER")
+    embedding_model_name: str = Field(
+        default="BAAI/bge-base-en-v1.5",
+        validation_alias="EMBEDDING_MODEL_NAME",
+    )
+    embedding_dimension: int = Field(
+        default=768,
+        ge=1,
+        validation_alias="EMBEDDING_DIMENSION",
+    )
+    embedding_vector_version: int = Field(
+        default=1,
+        ge=1,
+        validation_alias="EMBEDDING_VECTOR_VERSION",
+    )
+    embedding_timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        validation_alias="EMBEDDING_TIMEOUT_SECONDS",
+    )
+    embedding_max_input_chars: int = Field(
+        default=128000,
+        ge=1000,
+        validation_alias="EMBEDDING_MAX_INPUT_CHARS",
+    )
+    embedding_batch_size: int = Field(
+        default=32,
+        ge=1,
+        le=256,
+        validation_alias="EMBEDDING_BATCH_SIZE",
+    )
+    embedding_worker_poll_seconds: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="EMBEDDING_WORKER_POLL_SECONDS",
+    )
+    embedding_worker_max_chunks_per_loop: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        validation_alias="EMBEDDING_WORKER_MAX_CHUNKS_PER_LOOP",
+    )
     llm_synthesis_enabled: bool = Field(
         default=False,
         validation_alias="LLM_SYNTHESIS_ENABLED",

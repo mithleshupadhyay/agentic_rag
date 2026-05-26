@@ -41,13 +41,14 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas. | Add parser, metadata, chunking, embedding, indexing, retry, DLQ, and audit events with schema versioning and idempotency fields. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
-| `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat gateway with input/output request budget checks, transient provider retries, and in-memory circuit breaker protection used for grounded answer synthesis. | Add Redis-backed circuit breaker state, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
+| `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, in-memory circuit breaker protection, and embedding dimension validation. | Add Redis-backed circuit breaker state, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | In-memory LLM circuit breaker state and provider/model failure tracking. | Move state to Redis for multi-replica deployments, add provider health snapshots, and expose safe operational metrics. | High |
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
+| `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add Docker Compose service, worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and local smoke tests against PostgreSQL/pgvector. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -79,16 +80,18 @@ retrieval quality, and production operations.
 | `tests/unit/retrieval/test_context_builder.py` | Context builder tests. | Add adjacent chunk grouping, stronger truncation edge cases, per-document caps, and citation ordering tests. | High |
 | `tests/unit/storage/test_object_store.py` | Object storage tests. | Add mocked error handling tests, metadata tests, streaming upload tests, and local MinIO integration tests later. | Medium |
 | `tests/unit/workers/test_indexing.py` | BM25 indexing worker tests. | Add retry/DLQ, worker loop shutdown, batch sizing, and per-tenant selection tests. | Medium |
+| `tests/unit/workers/test_embedding.py` | Embedding worker tests for missing chunk selection, stale hash re-embedding, tenant batching, and provider failure safety. | Add worker loop shutdown tests, Docker smoke tests, retry/DLQ behavior, and PostgreSQL/pgvector integration coverage. | High |
 
 ## Recommended Next Implementation Order
 
 | Step | Work |
 |---|---|
-| 1 | Add selective embedding worker that calls the embedding CRUD layer and writes pgvector rows only for queries/documents that need semantic retrieval. |
-| 2 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
-| 3 | Add reranker integration and retrieval quality scoring. |
-| 4 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
-| 5 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
-| 6 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
-| 7 | Add streaming query responses and query-run cancellation. |
-| 8 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |
+| 1 | Add Docker Compose service and local smoke test for the embedding worker. |
+| 2 | Add vector similarity search over pgvector with tenant and ACL filters. |
+| 3 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
+| 4 | Add reranker integration and retrieval quality scoring. |
+| 5 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
+| 6 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
+| 7 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
+| 8 | Add streaming query responses and query-run cancellation. |
+| 9 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |

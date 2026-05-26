@@ -79,13 +79,17 @@ class ChatCompletionRequest(APIModel):
 class EmbeddingRequest(APIModel):
     auth: AuthContext
     texts: list[str] = Field(..., min_length=1)
+    model: str | None = None
+    provider: str | None = None
     model_tier: ModelTier = ModelTier.EMBEDDING_SMALL
+    timeout_seconds: int | None = Field(default=None, ge=1)
     metadata: JsonObject = Field(default_factory=dict)
 
 
 class EmbeddingResponse(APIModel):
     embeddings: list[list[float]]
     model: str
+    provider: str
     dimension: int = Field(..., ge=1)
     latency_ms: int = Field(..., ge=0)
 

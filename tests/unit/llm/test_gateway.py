@@ -6,8 +6,13 @@ from agentic_rag.llm.circuit_breaker import (
     get_llm_circuit_breaker_state,
     record_llm_circuit_breaker_failure,
 )
-from agentic_rag.llm.gateway import generate_chat_completion
-from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
+from agentic_rag.llm.gateway import generate_chat_completion, generate_embeddings
+from agentic_rag.shared.schemas.auth import AuthContext, TokenType
+from agentic_rag.shared.schemas.llm import (
+    ChatCompletionRequest,
+    EmbeddingRequest,
+    LLMMessage,
+)
 
 
 class FakeMessage:
@@ -27,6 +32,16 @@ class FakeResponse:
     choices = [FakeChoice()]
     usage = FakeUsage()
     _hidden_params = {"response_cost": 0.002}
+
+
+class FakeEmbeddingItem:
+    def __init__(self, value: float = 0.1):
+        self.embedding = [value] * 768
+
+
+class FakeEmbeddingResponse:
+    def __init__(self, count: int = 2):
+        self.data = [FakeEmbeddingItem(0.1 + index) for index in range(count)]
 
 
 @pytest.fixture(autouse=True)
@@ -435,3 +450,68 @@ def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) ->
 
     assert len(calls) == 1
     assert response.text == "Grounded answer [1]."
+
+
+def test_generate_embeddings_calls_litellm(monkeypatch) -> None:
+    captured = {}
+
+    def fake_embedding(**kwargs):
+        captured.update(kwargs)
+        return FakeEmbeddingResponse(count=2)
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_embedding", fake_embedding)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_provider", "litellm")
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.embedding_model_name",
+        "test-embedding-model",
+    )
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_dimension", 768)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_timeout_seconds", 12)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "secret-key")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+
+    response = generate_embeddings(
+        EmbeddingRequest(
+            auth=AuthContext(
+                user_id="embedding-worker",
+                tenant_id="tenant-a",
+                token_type=TokenType.SERVICE,
+            ),
+            texts=["first chunk", "second chunk"],
+        )
+    )
+
+    assert captured["model"] == "test-embedding-model"
+    assert captured["input"] == ["first chunk", "second chunk"]
+    assert captured["timeout"] == 12
+    assert captured["api_key"] == "secret-key"
+    assert "base_url" not in captured
+    assert len(response.embeddings) == 2
+    assert response.model == "test-embedding-model"
+    assert response.provider == "litellm"
+    assert response.dimension == 768
+
+
+def test_generate_embeddings_rejects_input_over_budget(monkeypatch) -> None:
+    def fake_embedding(**kwargs):
+        raise AssertionError("Provider should not be called for over-budget input.")
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_embedding", fake_embedding)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_max_input_chars", 10)
+
+    with pytest.raises(ValueError) as exc_info:
+        generate_embeddings(
+            EmbeddingRequest(
+                auth=AuthContext(
+                    user_id="embedding-worker",
+                    tenant_id="tenant-a",
+                    token_type=TokenType.SERVICE,
+                ),
+                texts=["x" * 11],
+            )
+        )
+
+    assert "input character budget" in str(exc_info.value)

@@ -598,9 +598,10 @@ embedding_exists(db, tenant_id, chunk_id, embedding_model, vector_version, conte
 ```
 
 Current implementation covers tenant-scoped embedding writes, idempotent
-same-hash writes, stale content-hash updates, dimension checks, and chunk
-selection for missing embeddings. Vector similarity search is intentionally a
-separate retrieval slice.
+same-hash writes, stale content-hash updates, dimension checks, chunk selection
+for missing embeddings, and a local embedding worker that calls the LLM gateway
+embedding contract. Vector similarity search is intentionally a separate
+retrieval slice.
 
 ### AgentRunRepository
 
@@ -849,6 +850,12 @@ Current local implementation:
 src/agentic_rag/llm/gateway.py
 src/agentic_rag/llm/circuit_breaker.py
 ```
+
+The local gateway supports chat completion and embedding generation through
+LiteLLM. Embedding calls enforce input budget, retry transient provider
+failures, reuse circuit-breaker protection, and validate the returned vector
+dimension against the configured pgvector dimension before workers persist
+vectors.
 
 Configuration:
 

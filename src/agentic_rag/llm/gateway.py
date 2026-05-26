@@ -11,6 +11,7 @@ from litellm import (
     ServiceUnavailableError,
     Timeout,
     completion as litellm_completion,
+    embedding as litellm_embedding,
 )
 
 from agentic_rag.llm.circuit_breaker import (
@@ -19,7 +20,12 @@ from agentic_rag.llm.circuit_breaker import (
     reset_llm_circuit_breaker,
 )
 from agentic_rag.shared.config import settings
-from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMResponse
+from agentic_rag.shared.schemas.llm import (
+    ChatCompletionRequest,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    LLMResponse,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -204,4 +210,160 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         cost_estimate=cost_estimate,
         latency_ms=latency_ms,
         metadata=request.metadata,
+    )
+
+
+def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
+    model = request.model or settings.embedding_model_name
+    provider = request.provider or settings.embedding_provider
+    timeout_seconds = request.timeout_seconds or settings.embedding_timeout_seconds
+    input_chars = sum(len(text) for text in request.texts)
+
+    if input_chars > settings.embedding_max_input_chars:
+        logger.warning(
+            f"[LLMGateway] Embedding request rejected by input budget "
+            f"tenant={request.auth.tenant_id} provider={provider} model={model} "
+            f"input_chars={input_chars} "
+            f"max_input_chars={settings.embedding_max_input_chars}"
+        )
+        raise ValueError(
+            "Embedding request exceeds input character budget "
+            f"({input_chars}>{settings.embedding_max_input_chars})."
+        )
+
+    if settings.llm_circuit_breaker_enabled:
+        check_llm_circuit_breaker(provider, model)
+
+    logger.info(
+        f"[LLMGateway] Embedding request started tenant={request.auth.tenant_id} "
+        f"provider={provider} model={model} texts={len(request.texts)} "
+        f"input_chars={input_chars} timeout_seconds={timeout_seconds}"
+    )
+    started_at = time.perf_counter()
+
+    embedding_kwargs: dict[str, Any] = {
+        "model": model,
+        "input": request.texts,
+        "timeout": timeout_seconds,
+    }
+
+    api_key = settings.llm_api_key or settings.litellm_api_key
+    if api_key:
+        embedding_kwargs["api_key"] = api_key
+
+    if settings.litellm_base_url:
+        embedding_kwargs["base_url"] = settings.litellm_base_url
+    elif model.startswith("ollama/") and settings.ollama_base_url:
+        embedding_kwargs["base_url"] = settings.ollama_base_url
+
+    response: Any | None = None
+    max_attempts = settings.llm_max_retries + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = litellm_embedding(**embedding_kwargs)
+            break
+        except (
+            APIConnectionError,
+            APIError,
+            BadGatewayError,
+            InternalServerError,
+            RateLimitError,
+            ServiceUnavailableError,
+            Timeout,
+        ) as e:
+            if attempt >= max_attempts:
+                if settings.llm_circuit_breaker_enabled:
+                    record_llm_circuit_breaker_failure(
+                        provider=provider,
+                        model=model,
+                        error=e,
+                        failure_threshold=(
+                            settings.llm_circuit_breaker_failure_threshold
+                        ),
+                        cooldown_seconds=(
+                            settings.llm_circuit_breaker_cooldown_seconds
+                        ),
+                    )
+
+                logger.exception(
+                    f"[LLMGateway] Embedding request failed after retries "
+                    f"tenant={request.auth.tenant_id} provider={provider} "
+                    f"model={model} attempts={attempt} "
+                    f"error_type={type(e).__name__}"
+                )
+                raise
+
+            retry_after_seconds = settings.llm_retry_backoff_seconds * (
+                2 ** (attempt - 1)
+            )
+            logger.warning(
+                f"[LLMGateway] Embedding request retry scheduled "
+                f"tenant={request.auth.tenant_id} provider={provider} "
+                f"model={model} attempt={attempt} max_attempts={max_attempts} "
+                f"retry_after_seconds={retry_after_seconds:.2f} "
+                f"error_type={type(e).__name__}"
+            )
+            if retry_after_seconds > 0:
+                time.sleep(retry_after_seconds)
+
+    if response is None:
+        raise RuntimeError("Embedding response was not returned.")
+
+    if settings.llm_circuit_breaker_enabled:
+        reset_llm_circuit_breaker(provider, model)
+
+    response_data = None
+    if isinstance(response, dict):
+        response_data = response.get("data")
+    else:
+        response_data = getattr(response, "data", None)
+
+    if not response_data:
+        raise RuntimeError("Embedding response did not include data.")
+
+    vectors: list[list[float]] = []
+    for item in response_data:
+        raw_vector = (
+            item.get("embedding")
+            if isinstance(item, dict)
+            else getattr(item, "embedding", None)
+        )
+        if not raw_vector:
+            raise RuntimeError("Embedding response included an empty vector.")
+        vectors.append([float(value) for value in raw_vector])
+
+    if len(vectors) != len(request.texts):
+        raise RuntimeError(
+            "Embedding response count did not match input text count "
+            f"({len(vectors)}!={len(request.texts)})."
+        )
+
+    dimension = len(vectors[0])
+    for vector in vectors:
+        if len(vector) != dimension:
+            raise RuntimeError("Embedding response included mixed vector dimensions.")
+
+    if dimension != settings.embedding_dimension:
+        logger.warning(
+            f"[LLMGateway] Embedding dimension mismatch provider={provider} "
+            f"model={model} expected={settings.embedding_dimension} actual={dimension}"
+        )
+        raise RuntimeError(
+            "Embedding dimension does not match configured vector dimension "
+            f"({dimension}!={settings.embedding_dimension})."
+        )
+
+    latency_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        f"[LLMGateway] Embedding request completed tenant={request.auth.tenant_id} "
+        f"provider={provider} model={model} texts={len(vectors)} "
+        f"dimension={dimension} latency_ms={latency_ms}"
+    )
+
+    return EmbeddingResponse(
+        embeddings=vectors,
+        model=model,
+        provider=provider,
+        dimension=dimension,
+        latency_ms=latency_ms,
     )
