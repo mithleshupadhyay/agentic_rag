@@ -1,4 +1,5 @@
 import pytest
+from litellm import RateLimitError, ServiceUnavailableError
 
 from agentic_rag.llm.gateway import generate_chat_completion
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
@@ -128,6 +129,7 @@ def test_generate_chat_completion_rejects_input_over_budget(monkeypatch) -> None
     monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
 
     with pytest.raises(ValueError) as exc_info:
         generate_chat_completion(
@@ -148,6 +150,7 @@ def test_generate_chat_completion_rejects_output_over_budget(monkeypatch) -> Non
     monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 64000)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 10)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
 
     with pytest.raises(ValueError) as exc_info:
         generate_chat_completion(
@@ -160,3 +163,81 @@ def test_generate_chat_completion_rejects_output_over_budget(monkeypatch) -> Non
         )
 
     assert "output token budget" in str(exc_info.value)
+
+
+def test_generate_chat_completion_retries_transient_failure(monkeypatch) -> None:
+    calls = []
+    sleep_seconds = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ServiceUnavailableError(
+                message="temporary provider failure",
+                llm_provider="litellm",
+                model="test-model",
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.time.sleep", sleep_seconds.append)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_retry_backoff_seconds", 0.1)
+
+    response = generate_chat_completion(
+        ChatCompletionRequest(
+            messages=[
+                LLMMessage(role="user", content="Question and context."),
+            ],
+        )
+    )
+
+    assert len(calls) == 2
+    assert sleep_seconds == [0.1]
+    assert response.text == "Grounded answer [1]."
+
+
+def test_generate_chat_completion_fails_after_retry_limit(monkeypatch) -> None:
+    calls = []
+    sleep_seconds = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        raise RateLimitError(
+            message="temporary rate limit",
+            llm_provider="litellm",
+            model="test-model",
+        )
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.time.sleep", sleep_seconds.append)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_retry_backoff_seconds", 0.1)
+
+    with pytest.raises(RateLimitError):
+        generate_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="user", content="Question and context."),
+                ],
+            )
+        )
+
+    assert len(calls) == 3
+    assert sleep_seconds == [0.1, 0.2]

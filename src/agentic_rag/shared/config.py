@@ -148,6 +148,18 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias="LLM_MAX_OUTPUT_TOKENS",
     )
+    llm_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        validation_alias="LLM_MAX_RETRIES",
+    )
+    llm_retry_backoff_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=30.0,
+        validation_alias="LLM_RETRY_BACKOFF_SECONDS",
+    )
     llm_timeout_seconds: int = Field(
         default=30,
         ge=1,

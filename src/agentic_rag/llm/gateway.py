@@ -2,7 +2,16 @@ import logging
 import time
 from typing import Any
 
-from litellm import completion as litellm_completion
+from litellm import (
+    APIConnectionError,
+    APIError,
+    BadGatewayError,
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    completion as litellm_completion,
+)
 
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMResponse
@@ -74,7 +83,45 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
     elif model.startswith("ollama/") and settings.ollama_base_url:
         completion_kwargs["base_url"] = settings.ollama_base_url
 
-    response = litellm_completion(**completion_kwargs)
+    response: Any | None = None
+    max_attempts = settings.llm_max_retries + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = litellm_completion(**completion_kwargs)
+            break
+        except (
+            APIConnectionError,
+            APIError,
+            BadGatewayError,
+            InternalServerError,
+            RateLimitError,
+            ServiceUnavailableError,
+            Timeout,
+        ) as e:
+            if attempt >= max_attempts:
+                logger.exception(
+                    f"[LLMGateway] Chat completion failed after retries "
+                    f"provider={provider} model={model} attempts={attempt} "
+                    f"error_type={type(e).__name__}"
+                )
+                raise
+
+            retry_after_seconds = settings.llm_retry_backoff_seconds * (
+                2 ** (attempt - 1)
+            )
+            logger.warning(
+                f"[LLMGateway] Chat completion retry scheduled "
+                f"provider={provider} model={model} attempt={attempt} "
+                f"max_attempts={max_attempts} "
+                f"retry_after_seconds={retry_after_seconds:.2f} "
+                f"error_type={type(e).__name__}"
+            )
+            if retry_after_seconds > 0:
+                time.sleep(retry_after_seconds)
+
+    if response is None:
+        raise RuntimeError("LLM response was not returned.")
+
     choices = getattr(response, "choices", None) or []
     if not choices:
         raise RuntimeError("LLM response did not include choices.")
