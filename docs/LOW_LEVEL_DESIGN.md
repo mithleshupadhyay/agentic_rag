@@ -591,11 +591,16 @@ Responsibilities:
 Core methods:
 
 ```python
-create_embedding(ctx, chunk_id, vector, model, dimension, content_hash) -> ChunkEmbedding
-bulk_create_embeddings(ctx, embeddings) -> int
-search_similar(ctx, query_vector, filters, limit) -> list[VectorSearchResult]
-embedding_exists(ctx, chunk_id, model, content_hash) -> bool
+create_chunk_embedding(db, tenant_id, obj_in) -> ChunkEmbedding
+bulk_create_chunk_embeddings(db, tenant_id, embeddings) -> int
+get_chunks_missing_embedding(db, tenant_id, embedding_model, vector_version, limit) -> list[DocumentChunk]
+embedding_exists(db, tenant_id, chunk_id, embedding_model, vector_version, content_hash) -> bool
 ```
+
+Current implementation covers tenant-scoped embedding writes, idempotent
+same-hash writes, stale content-hash updates, dimension checks, and chunk
+selection for missing embeddings. Vector similarity search is intentionally a
+separate retrieval slice.
 
 ### AgentRunRepository
 

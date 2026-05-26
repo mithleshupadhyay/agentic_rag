@@ -35,6 +35,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/acl.py` | Document and chunk ACL models. | Add policy versioning, inherited ACLs, group expansion snapshots, deny rules, and efficient indexes for retrieval-time chunk filtering. | High |
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model. | Add stage timestamps, worker lease fields, retry backoff fields, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
+| `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, and missing-embedding chunk selection. | Add vector similarity search, worker lease integration, Redis/Kafka scheduling, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
@@ -65,6 +66,7 @@ retrieval quality, and production operations.
 | `tests/unit/core/test_auth.py` | Auth tests. | Add OIDC JWKS cache tests, invalid issuer/audience tests, tenant claim mapping tests, and scope mapping tests. | High |
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
+| `tests/unit/shared/db/test_embedding_crud.py` | Embedding CRUD tests for tenant boundaries, idempotent writes, stale content-hash updates, missing-embedding selection, and dimension validation. | Add vector search tests, batch collision tests, and integration coverage against PostgreSQL/pgvector. | High |
 | `tests/unit/shared/db/test_indexing_crud.py` | BM25 indexing CRUD tests. | Add retry selection, failed-index recovery, tenant batching, and stale index-name/hash transition tests. | Medium |
 | `tests/unit/shared/db/test_query_runs_crud.py` | Query run CRUD tests for create, complete, fail, fetch, list, tenant scope, metric defaults, and rollback behavior. | Add status/date filtering, cancellation, request ID lookup, and retention cleanup tests. | Medium |
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
@@ -82,7 +84,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add selective embedding worker with pgvector writes for only queries/documents that need semantic retrieval. |
+| 1 | Add selective embedding worker that calls the embedding CRUD layer and writes pgvector rows only for queries/documents that need semantic retrieval. |
 | 2 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
 | 3 | Add reranker integration and retrieval quality scoring. |
 | 4 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
