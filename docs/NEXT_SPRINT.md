@@ -13,10 +13,10 @@ retrieval quality, and production operations.
 | `docs/ARCHITECTURE.md` | Defines the target production architecture. | Keep updated as services become real deployable components; add capacity assumptions for ingestion throughput, retrieval latency, cache hit rate, vectorization percentage, and storage growth. | High |
 | `docs/LOW_LEVEL_DESIGN.md` | Converts architecture into implementation details. | Add exact API contracts, worker contracts, retry rules, data retention rules, index ownership, and service-by-service deployment notes. | High |
 | `docs/NEXT_SPRINT.md` | Tracks upcoming technical scope. | Keep this file updated after every pushed step so the next development sequence stays clear and explainable. | High |
-| `Dockerfile.app` | Builds the shared Python runtime image used by API, migrations, seed, ingestion worker, and indexing worker. | Keep one shared image while API and workers use the same dependencies. Split later into focused Dockerfiles such as `Dockerfile.ingestion-worker`, `Dockerfile.embedding-worker`, or `Dockerfile.browser-worker` only when workers need heavy parser/OCR tools, ML/GPU libraries, browser automation, or different runtime hardening. | Medium |
-| `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, MinIO, OpenSearch, migrations, seed, ingestion worker, and indexing worker. | Add Redis and Kafka when queue-backed workers are implemented; add profiles for lightweight API-only and full ingestion stacks. | High |
+| `Dockerfile.app` | Builds the shared Python runtime image used by API, migrations, seed, ingestion worker, indexing worker, and embedding worker. | Keep one shared image while API and workers use the same dependencies. Split later into focused Dockerfiles such as `Dockerfile.ingestion-worker`, `Dockerfile.embedding-worker`, or `Dockerfile.browser-worker` only when workers need heavy parser/OCR tools, ML/GPU libraries, browser automation, or different runtime hardening. | Medium |
+| `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, MinIO, OpenSearch, migrations, seed, ingestion worker, indexing worker, and embedding worker. | Add Redis and Kafka when queue-backed workers are implemented; add profiles for lightweight API-only and full ingestion stacks. | High |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
-| `Makefile` | Provides repeatable validation and Docker commands. | Add migration, local smoke test, Docker smoke test, and service-specific worker commands as the stack grows. | Medium |
+| `Makefile` | Provides repeatable validation, Docker commands, and an embedding-worker Docker smoke check. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, and ingestion job creation. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
@@ -48,7 +48,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
-| `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add Docker Compose service, worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and local smoke tests against PostgreSQL/pgvector. | High |
+| `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and full local smoke tests against PostgreSQL/pgvector. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -86,12 +86,11 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add Docker Compose service and local smoke test for the embedding worker. |
-| 2 | Add vector similarity search over pgvector with tenant and ACL filters. |
-| 3 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
-| 4 | Add reranker integration and retrieval quality scoring. |
-| 5 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
-| 6 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
-| 7 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
-| 8 | Add streaming query responses and query-run cancellation. |
-| 9 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |
+| 1 | Add vector similarity search over pgvector with tenant and ACL filters. |
+| 2 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
+| 3 | Add reranker integration and retrieval quality scoring. |
+| 4 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |
+| 5 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
+| 6 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
+| 7 | Add streaming query responses and query-run cancellation. |
+| 8 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |

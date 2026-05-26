@@ -2,6 +2,10 @@ x-api-environment: &api-environment
   DATABASE_URL: ${DOCKER_DATABASE_URL}
   S3_ENDPOINT_URL: ${DOCKER_S3_ENDPOINT_URL}
   OPENSEARCH_URL: ${DOCKER_OPENSEARCH_URL}
+  LITELLM_BASE_URL: ${DOCKER_LITELLM_BASE_URL:-}
+
+x-host-gateway: &host-gateway
+  - "host.docker.internal:host-gateway"
 
 services:
   api:
@@ -15,6 +19,7 @@ services:
         required: false
     environment:
       <<: *api-environment
+    extra_hosts: *host-gateway
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -82,6 +87,29 @@ services:
     networks:
       - dbnet
       - searchnet
+
+  embedding-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      target: runtime
+    container_name: agentic-rag-embedding-worker
+    command: ["python", "-m", "agentic_rag.workers.embedding"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *api-environment
+    extra_hosts: *host-gateway
+    depends_on:
+      db-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - appnet
+      - dbnet
 
   postgres:
     image: pgvector/pgvector:pg16

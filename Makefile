@@ -5,7 +5,7 @@ DOCKER_COMPOSE_FILE ?= docker-compose.yml
 DOCKER_PROJECT ?= agentic-rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -25,6 +25,7 @@ help:
 	@printf '%s\n' "  make docker-ps     Show local Docker services"
 	@printf '%s\n' "  make docker-restart Restart local Docker services"
 	@printf '%s\n' "  make docker-exec SERVICE=api Open a shell in a service"
+	@printf '%s\n' "  make docker-smoke-embedding-worker Check embedding worker container imports and DB connection"
 
 test:
 	poetry run pytest
@@ -82,3 +83,6 @@ ifndef SERVICE
 	$(error Please provide SERVICE name. Usage: make docker-exec SERVICE=api)
 endif
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec $(SERVICE) bash
+
+docker-smoke-embedding-worker: ensure-env
+	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec embedding-worker python -c 'from sqlalchemy import text; from agentic_rag.shared.db.session import get_sync_session_factory; from agentic_rag.workers.embedding import process_embedding_batches; SessionLocal = get_sync_session_factory(); session = SessionLocal(); session.execute(text("SELECT 1")); session.close(); print("embedding-worker smoke ok")'
