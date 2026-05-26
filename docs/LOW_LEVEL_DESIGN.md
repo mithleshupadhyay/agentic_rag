@@ -816,6 +816,7 @@ Current local implementation:
 
 ```text
 src/agentic_rag/llm/gateway.py
+src/agentic_rag/llm/circuit_breaker.py
 ```
 
 Configuration:
@@ -830,6 +831,9 @@ LLM_MAX_INPUT_CHARS=64000
 LLM_MAX_OUTPUT_TOKENS=8000
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=0.5
+LLM_CIRCUIT_BREAKER_ENABLED=true
+LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
+LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS=60
 LLM_TIMEOUT_SECONDS=30
 ```
 

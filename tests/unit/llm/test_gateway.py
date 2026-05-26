@@ -1,6 +1,11 @@
 import pytest
 from litellm import RateLimitError, ServiceUnavailableError
 
+from agentic_rag.llm.circuit_breaker import (
+    clear_llm_circuit_breakers,
+    get_llm_circuit_breaker_state,
+    record_llm_circuit_breaker_failure,
+)
 from agentic_rag.llm.gateway import generate_chat_completion
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
 
@@ -22,6 +27,13 @@ class FakeResponse:
     choices = [FakeChoice()]
     usage = FakeUsage()
     _hidden_params = {"response_cost": 0.002}
+
+
+@pytest.fixture(autouse=True)
+def clear_llm_circuit_breaker_state():
+    clear_llm_circuit_breakers()
+    yield
+    clear_llm_circuit_breakers()
 
 
 def test_generate_chat_completion_calls_litellm(monkeypatch) -> None:
@@ -241,3 +253,185 @@ def test_generate_chat_completion_fails_after_retry_limit(monkeypatch) -> None:
 
     assert len(calls) == 3
     assert sleep_seconds == [0.1, 0.2]
+
+
+def test_generate_chat_completion_opens_circuit_after_failures(monkeypatch) -> None:
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        raise RateLimitError(
+            message="temporary rate limit",
+            llm_provider="litellm",
+            model="test-model",
+        )
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 0)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_circuit_breaker_enabled", True)
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.llm_circuit_breaker_failure_threshold",
+        2,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.llm_circuit_breaker_cooldown_seconds",
+        60,
+    )
+
+    request = ChatCompletionRequest(
+        messages=[
+            LLMMessage(role="user", content="Question and context."),
+        ],
+    )
+
+    with pytest.raises(RateLimitError):
+        generate_chat_completion(request)
+
+    with pytest.raises(RateLimitError):
+        generate_chat_completion(request)
+
+    assert len(calls) == 2
+    circuit_state = get_llm_circuit_breaker_state("litellm", "test-model")
+    assert circuit_state
+    assert circuit_state.failure_count == 2
+    assert circuit_state.opened_until == 1060.0
+
+
+def test_generate_chat_completion_fails_fast_when_circuit_open(monkeypatch) -> None:
+    def fake_completion(**kwargs):
+        raise AssertionError("Provider should not be called while circuit is open.")
+
+    monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
+    record_llm_circuit_breaker_failure(
+        provider="litellm",
+        model="test-model",
+        error=RateLimitError(
+            message="temporary rate limit",
+            llm_provider="litellm",
+            model="test-model",
+        ),
+        failure_threshold=1,
+        cooldown_seconds=60,
+    )
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_circuit_breaker_enabled", True)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        generate_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="user", content="Question and context."),
+                ],
+            )
+        )
+
+    assert "circuit breaker is open" in str(exc_info.value)
+
+
+def test_generate_chat_completion_resets_circuit_after_cooldown_success(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return FakeResponse()
+
+    current_time = [1000.0]
+    monkeypatch.setattr(
+        "agentic_rag.llm.circuit_breaker.time.time",
+        lambda: current_time[0],
+    )
+    record_llm_circuit_breaker_failure(
+        provider="litellm",
+        model="test-model",
+        error=RateLimitError(
+            message="temporary rate limit",
+            llm_provider="litellm",
+            model="test-model",
+        ),
+        failure_threshold=1,
+        cooldown_seconds=60,
+    )
+    current_time[0] = 1061.0
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 0)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_circuit_breaker_enabled", True)
+
+    response = generate_chat_completion(
+        ChatCompletionRequest(
+            messages=[
+                LLMMessage(role="user", content="Question and context."),
+            ],
+        )
+    )
+
+    assert len(calls) == 1
+    assert response.text == "Grounded answer [1]."
+    assert get_llm_circuit_breaker_state("litellm", "test-model") is None
+
+
+def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) -> None:
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
+    record_llm_circuit_breaker_failure(
+        provider="litellm",
+        model="test-model",
+        error=RateLimitError(
+            message="temporary rate limit",
+            llm_provider="litellm",
+            model="test-model",
+        ),
+        failure_threshold=1,
+        cooldown_seconds=60,
+    )
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_circuit_breaker_enabled", False)
+
+    response = generate_chat_completion(
+        ChatCompletionRequest(
+            messages=[
+                LLMMessage(role="user", content="Question and context."),
+            ],
+        )
+    )
+
+    assert len(calls) == 1
+    assert response.text == "Grounded answer [1]."

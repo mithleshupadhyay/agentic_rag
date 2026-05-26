@@ -160,6 +160,22 @@ class Settings(BaseSettings):
         le=30.0,
         validation_alias="LLM_RETRY_BACKOFF_SECONDS",
     )
+    llm_circuit_breaker_enabled: bool = Field(
+        default=True,
+        validation_alias="LLM_CIRCUIT_BREAKER_ENABLED",
+    )
+    llm_circuit_breaker_failure_threshold: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        validation_alias="LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    )
+    llm_circuit_breaker_cooldown_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        validation_alias="LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
+    )
     llm_timeout_seconds: int = Field(
         default=30,
         ge=1,

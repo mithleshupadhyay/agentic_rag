@@ -13,6 +13,11 @@ from litellm import (
     completion as litellm_completion,
 )
 
+from agentic_rag.llm.circuit_breaker import (
+    check_llm_circuit_breaker,
+    record_llm_circuit_breaker_failure,
+    reset_llm_circuit_breaker,
+)
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMResponse
 
@@ -55,6 +60,9 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
             "LLM request exceeds output token budget "
             f"({max_tokens}>{settings.llm_max_output_tokens})."
         )
+
+    if settings.llm_circuit_breaker_enabled:
+        check_llm_circuit_breaker(provider, model)
 
     logger.info(
         f"[LLMGateway] Chat completion started provider={provider} "
@@ -99,6 +107,19 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
             Timeout,
         ) as e:
             if attempt >= max_attempts:
+                if settings.llm_circuit_breaker_enabled:
+                    record_llm_circuit_breaker_failure(
+                        provider=provider,
+                        model=model,
+                        error=e,
+                        failure_threshold=(
+                            settings.llm_circuit_breaker_failure_threshold
+                        ),
+                        cooldown_seconds=(
+                            settings.llm_circuit_breaker_cooldown_seconds
+                        ),
+                    )
+
                 logger.exception(
                     f"[LLMGateway] Chat completion failed after retries "
                     f"provider={provider} model={model} attempts={attempt} "
@@ -121,6 +142,9 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
 
     if response is None:
         raise RuntimeError("LLM response was not returned.")
+
+    if settings.llm_circuit_breaker_enabled:
+        reset_llm_circuit_breaker(provider, model)
 
     choices = getattr(response, "choices", None) or []
     if not choices:
