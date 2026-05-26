@@ -668,9 +668,16 @@ user query
 -> returns citations
 ```
 
-The current query path can implement this incrementally: BM25 retrieval and
-context building first, answer verification next, then planner/tool routing,
-reformulation, vector search, web search, and full agent runtime.
+The current query path implements this incrementally with BM25 retrieval,
+context building, and deterministic answer verification first. Later steps add
+planner/tool routing, reformulation, vector search, web search, and full agent
+runtime.
+
+Current answer verification is deterministic. Synthesized answers must cite
+returned context using bracket numbers such as `[1]`; the verifier rejects
+answers with missing citations or citations that do not map to the returned
+context. When verification fails, the API keeps the retrieved context and
+citations in the response but returns a safe fallback answer.
 
 Request:
 

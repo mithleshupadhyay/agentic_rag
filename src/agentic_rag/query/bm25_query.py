@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.llm.gateway import generate_chat_completion
+from agentic_rag.query.answer_verifier import verify_answer_support
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.retrieval.context_builder import build_context
 from agentic_rag.shared.config import settings
@@ -151,13 +152,30 @@ def run_bm25_query(
                         },
                     )
                 )
-                answer = llm_response.text
-                synthesis_enabled = True
                 llm_provider = llm_response.provider
                 llm_model = llm_response.model
                 llm_input_tokens = llm_response.input_tokens
                 llm_output_tokens = llm_response.output_tokens
                 llm_cost_estimate = llm_response.cost_estimate
+                verification_result = verify_answer_support(
+                    answer=llm_response.text,
+                    context=context_response.context,
+                )
+                if verification_result.passed:
+                    answer = llm_response.text
+                    synthesis_enabled = True
+                else:
+                    logger.warning(
+                        f"[Query] LLM answer verification failed "
+                        f"tenant={user_context.tenant_id} user={user_context.id} "
+                        f"request_id={request_id} reason={verification_result.reason}"
+                    )
+                    answer = (
+                        "Retrieved context for this query, but the generated answer "
+                        "could not be verified against the returned citations. "
+                        "Use the returned context and citations for review."
+                    )
+                    synthesis_error = "LLM answer verification failed"
 
             except Exception as e:
                 logger.exception(
