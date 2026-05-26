@@ -48,6 +48,26 @@ store raw data cheaply
 This gives a better production trade-off than blindly pushing the full dataset
 into a vector database.
 
+The target agentic query flow is:
+
+```text
+user query
+-> planner decides what is needed
+-> chooses tools
+-> retrieval / web / metadata / document fetch / vector search
+-> evaluates evidence
+-> may retry or reformulate query
+-> builds context
+-> generates answer
+-> verifies answer
+-> returns citations
+```
+
+The first implementation can start with retrieval-only and deterministic
+verification, but the platform direction is a planner-driven workflow that
+chooses tools, evaluates evidence, and only returns answers grounded in
+authorized context.
+
 ## Recommended Stack
 
 This table is the implementation decision for this repository.

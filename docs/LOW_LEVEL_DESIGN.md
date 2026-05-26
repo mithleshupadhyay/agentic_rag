@@ -653,6 +653,25 @@ persisted tenant-scoped before retrieval starts, then marked completed or failed
 with latency, retrieval strategy, context summary, citations, LLM provider/model,
 token counts, cost estimate, and the final response payload.
 
+The target agentic query flow is:
+
+```text
+user query
+-> planner decides what is needed
+-> chooses tools
+-> retrieval / web / metadata / document fetch / vector search
+-> evaluates evidence
+-> may retry or reformulate query
+-> builds context
+-> generates answer
+-> verifies answer
+-> returns citations
+```
+
+The current query path can implement this incrementally: BM25 retrieval and
+context building first, answer verification next, then planner/tool routing,
+reformulation, vector search, web search, and full agent runtime.
+
 Request:
 
 ```python
