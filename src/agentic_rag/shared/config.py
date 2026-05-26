@@ -138,6 +138,16 @@ class Settings(BaseSettings):
         le=8000,
         validation_alias="LLM_MAX_TOKENS",
     )
+    llm_max_input_chars: int = Field(
+        default=64000,
+        ge=1000,
+        validation_alias="LLM_MAX_INPUT_CHARS",
+    )
+    llm_max_output_tokens: int = Field(
+        default=8000,
+        ge=1,
+        validation_alias="LLM_MAX_OUTPUT_TOKENS",
+    )
     llm_timeout_seconds: int = Field(
         default=30,
         ge=1,

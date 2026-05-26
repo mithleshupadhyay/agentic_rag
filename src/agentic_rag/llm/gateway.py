@@ -21,18 +21,44 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
     )
     max_tokens = request.max_tokens or settings.llm_max_tokens
     timeout_seconds = request.timeout_seconds or settings.llm_timeout_seconds
+    input_chars = 0
+    for request_message in request.messages:
+        input_chars += len(request_message.content)
+
+    if input_chars > settings.llm_max_input_chars:
+        logger.warning(
+            f"[LLMGateway] Request rejected by input budget provider={provider} "
+            f"model={model} input_chars={input_chars} "
+            f"max_input_chars={settings.llm_max_input_chars}"
+        )
+        raise ValueError(
+            "LLM request exceeds input character budget "
+            f"({input_chars}>{settings.llm_max_input_chars})."
+        )
+
+    if max_tokens > settings.llm_max_output_tokens:
+        logger.warning(
+            f"[LLMGateway] Request rejected by output budget provider={provider} "
+            f"model={model} max_tokens={max_tokens} "
+            f"max_output_tokens={settings.llm_max_output_tokens}"
+        )
+        raise ValueError(
+            "LLM request exceeds output token budget "
+            f"({max_tokens}>{settings.llm_max_output_tokens})."
+        )
 
     logger.info(
         f"[LLMGateway] Chat completion started provider={provider} "
-        f"model={model} max_tokens={max_tokens} timeout_seconds={timeout_seconds}"
+        f"model={model} input_chars={input_chars} max_tokens={max_tokens} "
+        f"timeout_seconds={timeout_seconds}"
     )
     started_at = time.perf_counter()
 
     completion_kwargs: dict[str, Any] = {
         "model": model,
         "messages": [
-            message.model_dump()
-            for message in request.messages
+            request_message.model_dump()
+            for request_message in request.messages
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -54,11 +80,15 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         raise RuntimeError("LLM response did not include choices.")
 
     first_choice = choices[0]
-    message = getattr(first_choice, "message", None)
-    if isinstance(message, dict):
-        text = message.get("content") or ""
+    response_message = getattr(first_choice, "message", None)
+    if isinstance(response_message, dict):
+        text = response_message.get("content") or ""
     else:
-        text = getattr(message, "content", "") if message is not None else ""
+        text = (
+            getattr(response_message, "content", "")
+            if response_message is not None
+            else ""
+        )
 
     text = text.strip()
     if not text:

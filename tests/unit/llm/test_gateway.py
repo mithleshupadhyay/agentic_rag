@@ -1,3 +1,5 @@
+import pytest
+
 from agentic_rag.llm.gateway import generate_chat_completion
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
 
@@ -37,6 +39,8 @@ def test_generate_chat_completion_calls_litellm(monkeypatch) -> None:
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_temperature", 0.2)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_tokens", 500)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 600)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_timeout_seconds", 15)
 
     response = generate_chat_completion(
@@ -115,3 +119,44 @@ def test_generate_chat_completion_rejects_empty_response(monkeypatch) -> None:
         assert "choices" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError")
+
+
+def test_generate_chat_completion_rejects_input_over_budget(monkeypatch) -> None:
+    def fake_completion(**kwargs):
+        raise AssertionError("Provider should not be called for over-budget input.")
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+
+    with pytest.raises(ValueError) as exc_info:
+        generate_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="user", content="x" * 1001),
+                ],
+            )
+        )
+
+    assert "input character budget" in str(exc_info.value)
+
+
+def test_generate_chat_completion_rejects_output_over_budget(monkeypatch) -> None:
+    def fake_completion(**kwargs):
+        raise AssertionError("Provider should not be called for over-budget output.")
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 64000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 10)
+
+    with pytest.raises(ValueError) as exc_info:
+        generate_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="user", content="Question and context."),
+                ],
+                max_tokens=11,
+            )
+        )
+
+    assert "output token budget" in str(exc_info.value)
