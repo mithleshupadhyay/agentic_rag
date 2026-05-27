@@ -1,16 +1,28 @@
 import logging
+from dataclasses import dataclass
+from math import sqrt
 from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import not_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from agentic_rag.shared.db.models import ChunkEmbedding, Document, DocumentChunk
+from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.shared.db.models import ChunkAcl, ChunkEmbedding, Document, DocumentChunk
+from agentic_rag.shared.schemas.auth import Visibility
 from agentic_rag.shared.schemas.chunks import ChunkEmbeddingCreate
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChunkVectorSearchResult:
+    chunk: DocumentChunk
+    similarity: float
+    distance: float
 
 
 def embedding_exists(
@@ -341,3 +353,231 @@ def get_chunks_missing_embedding(
         f"[DB] Found {len(chunks)} chunks missing embedding tenant={tenant_id}"
     )
     return chunks
+
+
+def search_similar_chunks_by_embedding(
+    db: Session,
+    tenant_id: str,
+    query_embedding: list[float],
+    embedding_model: str,
+    vector_version: int = 1,
+    embedding_dimension: int = 768,
+    limit: int = 20,
+    min_similarity: Optional[float] = None,
+    workspace_id: Optional[str] = None,
+    document_ids: Optional[list[UUID]] = None,
+    user_context: Optional[UserContext] = None,
+) -> list[ChunkVectorSearchResult]:
+    logger.info(
+        f"[DB] Searching similar chunks tenant={tenant_id} model={embedding_model} "
+        f"vector_version={vector_version} limit={limit} workspace_id={workspace_id} "
+        f"document_count={len(document_ids or [])}"
+    )
+    if not query_embedding:
+        raise HTTPException(status_code=400, detail="Query embedding is required.")
+    if len(query_embedding) != embedding_dimension:
+        raise HTTPException(
+            status_code=400,
+            detail="Query embedding dimension must match configured embedding dimension.",
+        )
+    if limit < 1 or limit > 200:
+        raise HTTPException(
+            status_code=400,
+            detail="Vector search limit must be between 1 and 200.",
+        )
+    if min_similarity is not None and not 0 <= min_similarity <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum similarity must be between 0 and 1.",
+        )
+    if user_context and user_context.tenant_id != tenant_id:
+        logger.warning(
+            f"[DB] Vector search denied by tenant mismatch tenant={tenant_id} "
+            f"user_tenant={user_context.tenant_id}"
+        )
+        return []
+
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind else ""
+
+    if dialect_name == "sqlite":
+        query = (
+            db.query(ChunkEmbedding, DocumentChunk)
+            .join(DocumentChunk, DocumentChunk.id == ChunkEmbedding.chunk_id)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .options(
+                selectinload(ChunkEmbedding.chunk).selectinload(DocumentChunk.acl),
+                selectinload(ChunkEmbedding.chunk).selectinload(DocumentChunk.document),
+            )
+            .filter(
+                ChunkEmbedding.tenant_id == tenant_id,
+                ChunkEmbedding.embedding_model == embedding_model,
+                ChunkEmbedding.vector_version == vector_version,
+                ChunkEmbedding.embedding_dimension == embedding_dimension,
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.is_deleted.is_(False),
+                Document.is_deleted.is_(False),
+                Document.status == "ready",
+            )
+        )
+        if workspace_id:
+            query = query.filter(DocumentChunk.workspace_id == workspace_id)
+        if document_ids:
+            query = query.filter(DocumentChunk.document_id.in_(document_ids))
+
+        query_embedding_norm = sqrt(sum(value * value for value in query_embedding))
+        user_group_set = set(user_context.group_ids or []) if user_context else set()
+        user_role_set = set(user_context.roles or []) if user_context else set()
+        results: list[ChunkVectorSearchResult] = []
+        for embedding, chunk in query.all():
+            # Step: apply chunk ACL checks for the requesting user.
+            if user_context:
+                if chunk.tenant_id != user_context.tenant_id:
+                    continue
+
+                acl = chunk.acl
+                acl_version = acl.acl_version if acl else chunk.acl_version
+                if user_context.acl_version < acl_version:
+                    continue
+
+                if acl:
+                    if user_context.id in acl.denied_user_ids:
+                        continue
+                    if user_group_set.intersection(acl.denied_group_ids):
+                        continue
+
+                allowed = False
+                if "admin" in user_role_set:
+                    allowed = True
+                elif chunk.document and chunk.document.owner_user_id == user_context.id:
+                    allowed = True
+                elif acl:
+                    if str(acl.visibility) in (
+                        Visibility.PUBLIC.value,
+                        Visibility.TENANT.value,
+                    ):
+                        allowed = True
+                    elif user_context.id in acl.allowed_user_ids:
+                        allowed = True
+                    elif user_group_set.intersection(acl.allowed_group_ids):
+                        allowed = True
+                    elif user_role_set.intersection(acl.allowed_roles):
+                        allowed = True
+
+                if not allowed:
+                    continue
+
+            # Step: compute cosine distance in SQLite for unit-test fallback.
+            stored_embedding = list(embedding.embedding)
+            if len(stored_embedding) != len(query_embedding):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Query embedding dimension must match stored embedding "
+                        "dimension."
+                    ),
+                )
+
+            stored_embedding_norm = sqrt(
+                sum(value * value for value in stored_embedding)
+            )
+            if query_embedding_norm == 0 or stored_embedding_norm == 0:
+                distance = 1.0
+            else:
+                similarity_score = sum(
+                    query_value * stored_value
+                    for query_value, stored_value in zip(
+                        query_embedding,
+                        stored_embedding,
+                    )
+                ) / (query_embedding_norm * stored_embedding_norm)
+                similarity_score = max(min(similarity_score, 1.0), -1.0)
+                distance = 1.0 - similarity_score
+
+            similarity = 1.0 - distance
+            if min_similarity is not None and similarity < min_similarity:
+                continue
+            results.append(
+                ChunkVectorSearchResult(
+                    chunk=chunk,
+                    similarity=similarity,
+                    distance=distance,
+                )
+            )
+
+        results.sort(key=lambda result: (result.distance, result.chunk.created_at))
+        logger.info(
+            f"[DB] Vector search returned {len(results[:limit])} chunks "
+            f"tenant={tenant_id}"
+        )
+        return results[:limit]
+
+    distance_expr = ChunkEmbedding.embedding.cosine_distance(query_embedding)  # type: ignore[attr-defined]
+    query = (
+        db.query(DocumentChunk, distance_expr.label("distance"))
+        .join(ChunkEmbedding, ChunkEmbedding.chunk_id == DocumentChunk.id)
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .outerjoin(ChunkAcl, ChunkAcl.chunk_id == DocumentChunk.id)
+        .options(selectinload(DocumentChunk.document), selectinload(DocumentChunk.acl))
+        .filter(
+            ChunkEmbedding.tenant_id == tenant_id,
+            ChunkEmbedding.embedding_model == embedding_model,
+            ChunkEmbedding.vector_version == vector_version,
+            ChunkEmbedding.embedding_dimension == embedding_dimension,
+            DocumentChunk.tenant_id == tenant_id,
+            DocumentChunk.is_deleted.is_(False),
+            Document.is_deleted.is_(False),
+            Document.status == "ready",
+        )
+    )
+    if workspace_id:
+        query = query.filter(DocumentChunk.workspace_id == workspace_id)
+    if document_ids:
+        query = query.filter(DocumentChunk.document_id.in_(document_ids))
+    if min_similarity is not None:
+        query = query.filter(distance_expr <= 1.0 - min_similarity)
+
+    if user_context:
+        user_groups = user_context.group_ids or []
+        user_roles = user_context.roles or []
+        query = query.filter(
+            DocumentChunk.acl_version <= user_context.acl_version,
+            or_(ChunkAcl.id.is_(None), ChunkAcl.acl_version <= user_context.acl_version),
+        )
+
+        denied_clauses = [ChunkAcl.denied_user_ids.contains([user_context.id])]
+        for group_id in user_groups:
+            denied_clauses.append(ChunkAcl.denied_group_ids.contains([group_id]))
+        query = query.filter(
+            or_(ChunkAcl.id.is_(None), not_(or_(*denied_clauses)))
+        )
+
+        if "admin" not in user_roles:
+            allowed_clauses = [
+                Document.owner_user_id == user_context.id,
+                ChunkAcl.visibility.in_(
+                    [Visibility.PUBLIC.value, Visibility.TENANT.value]
+                ),
+                ChunkAcl.allowed_user_ids.contains([user_context.id]),
+            ]
+            for group_id in user_groups:
+                allowed_clauses.append(ChunkAcl.allowed_group_ids.contains([group_id]))
+            for role in user_roles:
+                allowed_clauses.append(ChunkAcl.allowed_roles.contains([role]))
+            query = query.filter(or_(*allowed_clauses))
+
+    rows = (
+        query.order_by(distance_expr.asc(), DocumentChunk.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    results = [
+        ChunkVectorSearchResult(
+            chunk=chunk,
+            similarity=1.0 - float(distance),
+            distance=float(distance),
+        )
+        for chunk, distance in rows
+    ]
+    logger.info(f"[DB] Vector search returned {len(results)} chunks tenant={tenant_id}")
+    return results

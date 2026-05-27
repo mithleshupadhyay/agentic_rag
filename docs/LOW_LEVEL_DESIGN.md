@@ -595,13 +595,16 @@ create_chunk_embedding(db, tenant_id, obj_in) -> ChunkEmbedding
 bulk_create_chunk_embeddings(db, tenant_id, embeddings) -> int
 get_chunks_missing_embedding(db, tenant_id, embedding_model, vector_version, limit) -> list[DocumentChunk]
 embedding_exists(db, tenant_id, chunk_id, embedding_model, vector_version, content_hash) -> bool
+search_similar_chunks_by_embedding(db, tenant_id, query_embedding, embedding_model, vector_version, limit) -> list[ChunkVectorSearchResult]
 ```
 
 Current implementation covers tenant-scoped embedding writes, idempotent
 same-hash writes, stale content-hash updates, dimension checks, chunk selection
 for missing embeddings, and a local embedding worker that calls the LLM gateway
-embedding contract. Vector similarity search is intentionally a separate
-retrieval slice.
+embedding contract. It also includes tenant-scoped pgvector similarity search
+with model/version filters, deleted-record filtering, optional workspace and
+document filters, and optional user ACL filtering. Retrieval API integration is
+intentionally a separate slice.
 
 ### AgentRunRepository
 

@@ -13,6 +13,7 @@ from agentic_rag.shared.db.crud.embeddings import (
     create_chunk_embedding,
     embedding_exists,
     get_chunks_missing_embedding,
+    search_similar_chunks_by_embedding,
 )
 from agentic_rag.shared.db.crud.ingestion import replace_document_chunks
 from agentic_rag.shared.db.models import ChunkEmbedding, DocumentChunk, Tenant
@@ -31,6 +32,9 @@ def db() -> Iterator[Session]:
 
 
 def add_tenant(db: Session, tenant_id: str) -> None:
+    if db.query(Tenant).filter(Tenant.tenant_id == tenant_id).first():
+        return
+
     db.add(
         Tenant(
             tenant_id=tenant_id,
@@ -110,6 +114,12 @@ def embedding_payload(
         vector_version=1,
         metadata={"source": "unit-test"},
     )
+
+
+def vector_at(index: int) -> list[float]:
+    vector = [0.0] * 768
+    vector[index] = 1.0
+    return vector
 
 
 def test_create_chunk_embedding_persists_tenant_scoped_embedding(
@@ -279,3 +289,210 @@ def test_bulk_create_chunk_embeddings_rejects_dimension_mismatch(
 
     assert exc_info.value.status_code == 400
     assert db.scalars(select(ChunkEmbedding)).all() == []
+
+
+def test_search_similar_chunks_by_embedding_returns_ranked_tenant_results(
+    db: Session,
+) -> None:
+    _, closest_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Password rotation policy.",
+        content_hash="hash-vector-1",
+    )
+    _, farther_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Office lunch schedule.",
+        content_hash="hash-vector-2",
+    )
+    _, other_tenant_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-b",
+        workspace_id="workspace-b",
+        content="Password rotation policy from another tenant.",
+        content_hash="hash-vector-3",
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(closest_chunk, embedding=vector_at(0)),
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(farther_chunk, embedding=vector_at(1)),
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-b",
+        obj_in=embedding_payload(other_tenant_chunk, embedding=vector_at(0)),
+    )
+
+    results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+        limit=10,
+    )
+
+    assert [result.chunk.id for result in results] == [
+        closest_chunk.id,
+        farther_chunk.id,
+    ]
+    assert results[0].similarity > results[1].similarity
+    assert results[0].distance < results[1].distance
+
+
+def test_search_similar_chunks_by_embedding_filters_model_and_version(
+    db: Session,
+) -> None:
+    _, current_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Current embedding model chunk.",
+        content_hash="hash-current-model",
+    )
+    _, wrong_model_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Old embedding model chunk.",
+        content_hash="hash-wrong-model",
+    )
+    _, wrong_version_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Old vector version chunk.",
+        content_hash="hash-wrong-version",
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(current_chunk, embedding=vector_at(0)),
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=ChunkEmbeddingCreate(
+            chunk_id=wrong_model_chunk.id,
+            document_id=wrong_model_chunk.document_id,
+            embedding=vector_at(0),
+            embedding_model="old-embedding-model",
+            embedding_dimension=768,
+            content_hash=wrong_model_chunk.content_hash,
+            vector_version=1,
+            metadata={"source": "unit-test"},
+        ),
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=ChunkEmbeddingCreate(
+            chunk_id=wrong_version_chunk.id,
+            document_id=wrong_version_chunk.document_id,
+            embedding=vector_at(0),
+            embedding_model="text-embedding-test",
+            embedding_dimension=768,
+            content_hash=wrong_version_chunk.content_hash,
+            vector_version=2,
+            metadata={"source": "unit-test"},
+        ),
+    )
+
+    results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+        vector_version=1,
+    )
+
+    assert [result.chunk.id for result in results] == [current_chunk.id]
+
+
+def test_search_similar_chunks_by_embedding_excludes_deleted_records(
+    db: Session,
+) -> None:
+    _, deleted_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Deleted chunk.",
+        content_hash="hash-deleted-chunk",
+    )
+    deleted_document, document_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Deleted document chunk.",
+        content_hash="hash-deleted-document",
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(deleted_chunk, embedding=vector_at(0)),
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(document_chunk, embedding=vector_at(0)),
+    )
+    deleted_chunk.is_deleted = True
+    deleted_document.is_deleted = True
+    db.commit()
+
+    results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+    )
+
+    assert results == []
+
+
+def test_search_similar_chunks_by_embedding_applies_user_acl(
+    db: Session,
+) -> None:
+    _, chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Security group only chunk.",
+        content_hash="hash-acl-vector",
+    )
+    create_chunk_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        obj_in=embedding_payload(chunk, embedding=vector_at(0)),
+    )
+    denied_context = UserContext(
+        id="user-2",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        group_ids=[],
+        acl_version=2,
+    )
+    allowed_context = UserContext(
+        id="user-2",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        group_ids=["security"],
+        acl_version=2,
+    )
+
+    denied_results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+        user_context=denied_context,
+    )
+    allowed_results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+        user_context=allowed_context,
+    )
+
+    assert denied_results == []
+    assert [result.chunk.id for result in allowed_results] == [chunk.id]
