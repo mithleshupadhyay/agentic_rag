@@ -8,6 +8,7 @@ from agentic_rag.retrieval import hybrid_search
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
+    RerankResponse,
     RetrievalFilters,
     RetrievalResponse,
     RetrievalStrategy,
@@ -129,6 +130,28 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
             latency_ms=11,
         )
 
+    def fake_rerank_chunks(query, candidates, top_k):
+        captured["rerank_query"] = query
+        captured["rerank_candidates"] = candidates
+        captured["rerank_top_k"] = top_k
+        reranked_candidates = []
+        for index, candidate in enumerate(candidates, start=1):
+            reranked_candidate = candidate.model_copy(deep=True)
+            rerank_score = 1 / index
+            reranked_candidate.score = rerank_score
+            reranked_candidate.source = RetrievalTool.RERANK.value
+            reranked_candidate.metadata = {
+                **candidate.metadata,
+                "original_score": candidate.score,
+                "original_source": candidate.source,
+                "rerank_score": rerank_score,
+                "rerank_rank": index,
+            }
+            if reranked_candidate.citation:
+                reranked_candidate.citation.score = rerank_score
+            reranked_candidates.append(reranked_candidate)
+        return RerankResponse(chunks=reranked_candidates, latency_ms=2)
+
     monkeypatch.setattr(
         hybrid_search,
         "search_bm25_chunks",
@@ -138,6 +161,11 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
         hybrid_search,
         "search_vector_chunks",
         fake_search_vector_chunks,
+    )
+    monkeypatch.setattr(
+        hybrid_search,
+        "rerank_chunks",
+        fake_rerank_chunks,
     )
 
     response = hybrid_search.search_hybrid_chunks(
@@ -155,7 +183,7 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
         bm25_only_chunk_id,
         vector_only_chunk_id,
     ]
-    assert response.candidates[0].source == RetrievalStrategy.HYBRID.value
+    assert response.candidates[0].source == RetrievalTool.RERANK.value
     assert response.candidates[0].score == 1.0
     assert response.candidates[0].content == "BM25 highlighted shared content."
     assert response.candidates[0].citation.score == 1.0
@@ -166,6 +194,16 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
     assert response.candidates[0].metadata["bm25_score"] == 12.0
     assert response.candidates[0].metadata["vector_score"] == 0.92
     assert response.candidates[0].metadata["hybrid_rank_score"] == 1.0
+    assert response.candidates[0].metadata["pre_rerank_score"] == 1.0
+    assert response.candidates[0].metadata["pre_rerank_source"] == (
+        RetrievalStrategy.HYBRID.value
+    )
+    assert response.candidates[0].metadata["original_score"] == 1.0
+    assert response.candidates[0].metadata["original_source"] == (
+        RetrievalStrategy.HYBRID.value
+    )
+    assert response.candidates[0].metadata["rerank_score"] == 1.0
+    assert response.candidates[0].metadata["rerank_rank"] == 1
     assert response.candidates[1].metadata["retrieval_sources"] == [
         RetrievalTool.BM25_SEARCH.value
     ]
@@ -180,6 +218,14 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
     assert captured["vector_filters"] == filters
     assert captured["vector_limit"] == 5
     assert captured["vector_min_similarity"] == 0.7
+    assert captured["rerank_query"] == "security policy"
+    assert captured["rerank_top_k"] == 5
+    assert [candidate.chunk_id for candidate in captured["rerank_candidates"]] == [
+        shared_chunk_id,
+        bm25_only_chunk_id,
+        vector_only_chunk_id,
+    ]
+    assert captured["rerank_candidates"][0].metadata["pre_rerank_score"] == 1.0
 
 
 def test_search_hybrid_chunks_truncates_to_limit(monkeypatch) -> None:

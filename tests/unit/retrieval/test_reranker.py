@@ -200,4 +200,4 @@ def test_rerank_chunks_rejects_invalid_top_k() -> None:
         )
 
     assert exc_info.value.status_code == 400
-    assert "between 1 and 100" in exc_info.value.detail
+    assert "between 1 and 200" in exc_info.value.detail

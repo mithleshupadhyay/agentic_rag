@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
+from agentic_rag.retrieval.reranker import rerank_chunks
 from agentic_rag.retrieval.vector_search import search_vector_chunks
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.retrieval import (
@@ -182,16 +183,25 @@ def search_hybrid_chunks(
         )
     )
     candidates = candidates[:limit]
+    for candidate in candidates:
+        candidate.metadata["pre_rerank_score"] = candidate.score
+        candidate.metadata["pre_rerank_source"] = candidate.source
+
+    rerank_response = rerank_chunks(
+        query=query_text,
+        candidates=candidates,
+        top_k=limit,
+    )
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     logger.info(
         f"[Retrieval] Hybrid search completed tenant={user_context.tenant_id} "
-        f"user={user_context.id} candidates={len(candidates)} "
+        f"user={user_context.id} candidates={len(rerank_response.chunks)} "
         f"bm25_candidates={len(bm25_response.candidates)} "
         f"vector_candidates={len(vector_response.candidates)} latency_ms={latency_ms}"
     )
     return RetrievalResponse(
         strategy=RetrievalStrategy.HYBRID,
-        candidates=candidates,
+        candidates=rerank_response.chunks,
         latency_ms=latency_ms,
     )

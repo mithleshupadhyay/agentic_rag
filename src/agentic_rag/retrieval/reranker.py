@@ -28,10 +28,10 @@ def rerank_chunks(
     if not query_text:
         raise HTTPException(status_code=400, detail="Rerank query is required.")
 
-    if top_k < 1 or top_k > 100:
+    if top_k < 1 or top_k > 200:
         raise HTTPException(
             status_code=400,
-            detail="Rerank top_k must be between 1 and 100.",
+            detail="Rerank top_k must be between 1 and 200.",
         )
 
     query_terms = set(re.findall(r"[a-z0-9]+", query_text.lower()))

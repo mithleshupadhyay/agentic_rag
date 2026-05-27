@@ -610,8 +610,10 @@ service now calls BM25 and vector retrieval, merges duplicate chunks by ID, and
 uses simple rank-based scoring so BM25 and vector scores do not need to share a
 numeric scale. The reranker service now applies deterministic, provider-neutral
 query-to-candidate scoring, preserves original retrieval score/source metadata,
-and returns a bounded reranked candidate list. Model-backed reranking, hybrid
-reranker handoff, and context building are intentionally separate slices.
+and returns a bounded reranked candidate list. Hybrid retrieval now passes
+merged candidates through the reranker and keeps pre-rerank score/source
+metadata for explainability. Model-backed reranking, a protected rerank API
+endpoint, and context building are intentionally separate slices.
 
 Core reranker method:
 
