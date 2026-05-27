@@ -1,8 +1,9 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -10,6 +11,79 @@ from agentic_rag.shared.db.models import ChunkAcl, Document, DocumentChunk, Inge
 
 
 logger = logging.getLogger(__name__)
+
+
+def claim_next_ingestion_job(
+    db: Session,
+    worker_id: str,
+    lease_seconds: int,
+) -> Optional[IngestionJob]:
+    logger.info(f"[DB] Claiming next ingestion job worker={worker_id}")
+    now = datetime.now(timezone.utc)
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    query = (
+        db.query(IngestionJob)
+        .options(
+            selectinload(IngestionJob.document).selectinload(Document.acl),
+        )
+        .filter(
+            or_(
+                IngestionJob.status == "queued",
+                and_(
+                    IngestionJob.status == "running",
+                    IngestionJob.lease_expires_at.is_not(None),
+                    IngestionJob.lease_expires_at <= now,
+                ),
+                and_(
+                    IngestionJob.status == "failed",
+                    IngestionJob.retry_count < IngestionJob.max_retries,
+                    or_(
+                        IngestionJob.next_retry_at.is_(None),
+                        IngestionJob.next_retry_at <= now,
+                    ),
+                ),
+            )
+        )
+        .order_by(IngestionJob.created_at.asc())
+    )
+
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind else ""
+    if dialect_name == "postgresql":
+        query = query.with_for_update(skip_locked=True)
+
+    job = query.first()
+    if not job:
+        logger.info("[DB] No claimable ingestion job found")
+        return None
+
+    logger.info(f"[DB] Claimed ingestion job {job.id} worker={worker_id}")
+    job.status = "running"
+    job.current_stage = "parse"
+    job.error_type = None
+    job.error_message = None
+    job.locked_by = worker_id
+    job.locked_at = now
+    job.lease_expires_at = lease_expires_at
+    job.next_retry_at = None
+    job.started_at = now
+
+    try:
+        db.commit()
+        db.refresh(job)
+        _ = job.document
+        logger.info(
+            f"[DB] Ingestion job {job.id} lease_expires_at={lease_expires_at}"
+        )
+        return job
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to claim ingestion job {job.id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during ingestion job claim.",
+        )
 
 
 def get_next_queued_ingestion_job(db: Session) -> Optional[IngestionJob]:
@@ -36,13 +110,24 @@ def get_next_queued_ingestion_job(db: Session) -> Optional[IngestionJob]:
     return job
 
 
-def mark_ingestion_job_running(db: Session, job: IngestionJob) -> IngestionJob:
+def mark_ingestion_job_running(
+    db: Session,
+    job: IngestionJob,
+    worker_id: str | None = None,
+    lease_seconds: int | None = None,
+) -> IngestionJob:
     logger.info(f"[DB] Marking ingestion job {job.id} as running")
+    now = datetime.now(timezone.utc)
     job.status = "running"
     job.current_stage = "parse"
     job.error_type = None
     job.error_message = None
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = now
+    job.next_retry_at = None
+    if worker_id and lease_seconds:
+        job.locked_by = worker_id
+        job.locked_at = now
+        job.lease_expires_at = now + timedelta(seconds=lease_seconds)
 
     try:
         db.commit()
@@ -89,6 +174,10 @@ def mark_ingestion_job_completed(db: Session, job: IngestionJob) -> IngestionJob
     job.completed_at = datetime.now(timezone.utc)
     job.error_type = None
     job.error_message = None
+    job.locked_by = None
+    job.locked_at = None
+    job.lease_expires_at = None
+    job.next_retry_at = None
 
     try:
         db.commit()
@@ -117,6 +206,12 @@ def mark_ingestion_job_failed(
     job.error_message = error_message
     job.retry_count = (job.retry_count or 0) + 1
     job.completed_at = datetime.now(timezone.utc)
+    job.locked_by = None
+    job.locked_at = None
+    job.lease_expires_at = None
+    job.next_retry_at = (
+        datetime.now(timezone.utc) if job.retry_count < job.max_retries else None
+    )
 
     try:
         db.commit()

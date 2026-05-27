@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,6 +13,7 @@ from agentic_rag.shared.db.crud.documents import (
     create_ingestion_job_for_document,
 )
 from agentic_rag.shared.db.crud.ingestion import (
+    claim_next_ingestion_job,
     get_next_queued_ingestion_job,
     mark_ingestion_job_completed,
     mark_ingestion_job_failed,
@@ -93,6 +95,49 @@ def create_uploaded_document(db: Session):
     return user_context, document, job
 
 
+def create_uploaded_document_for_user(
+    db: Session,
+    user_context: UserContext,
+    title: str,
+):
+    document = create_document(
+        user_context=user_context,
+        db=db,
+        obj_in=DocumentCreateRequest(
+            workspace_id="workspace-a",
+            source_type=DocumentSourceType.UPLOAD,
+            source_uri=f"upload://{title}.txt",
+            title=title,
+            file=FileMetadata(
+                file_name=f"{title}.txt",
+                mime_type="text/plain",
+                byte_size=50,
+                content_hash=f"{title}-hash",
+            ),
+            metadata={},
+            acl=AclPolicy(
+                visibility=Visibility.GROUP,
+                allowed_group_ids=["security"],
+                acl_version=2,
+            ),
+        ),
+    )
+    document = attach_document_object(
+        db=db,
+        db_obj=document,
+        object_key=(
+            "tenants/tenant-a/workspaces/workspace-a/documents/"
+            f"{document.id}/raw/{title}.txt"
+        ),
+    )
+    job = create_ingestion_job_for_document(
+        user_context=user_context,
+        db=db,
+        document=document,
+    )
+    return document, job
+
+
 def test_ingestion_job_status_transitions(db: Session) -> None:
     _, _, job = create_uploaded_document(db)
 
@@ -109,6 +154,111 @@ def test_ingestion_job_status_transitions(db: Session) -> None:
     assert completed_job.status == "completed"
     assert completed_job.current_stage == "complete"
     assert completed_job.completed_at is not None
+    assert completed_job.locked_by is None
+    assert completed_job.lease_expires_at is None
+
+
+def test_claim_next_ingestion_job_claims_oldest_queued_job(db: Session) -> None:
+    _, _, job = create_uploaded_document(db)
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    assert claimed_job.id == job.id
+    assert claimed_job.status == "running"
+    assert claimed_job.current_stage == "parse"
+    assert claimed_job.locked_by == "worker-1"
+    assert claimed_job.locked_at is not None
+    assert claimed_job.lease_expires_at is not None
+    assert claimed_job.next_retry_at is None
+
+
+def test_claim_next_ingestion_job_skips_active_lease(db: Session) -> None:
+    user_context, _, first_job = create_uploaded_document(db)
+    _, second_job = create_uploaded_document_for_user(
+        db=db,
+        user_context=user_context,
+        title="second-policy",
+    )
+    first_job.status = "running"
+    first_job.locked_by = "worker-1"
+    first_job.locked_at = datetime.now(timezone.utc)
+    first_job.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db.commit()
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-2",
+        lease_seconds=300,
+    )
+
+    assert claimed_job.id == second_job.id
+    assert claimed_job.locked_by == "worker-2"
+
+
+def test_claim_next_ingestion_job_reclaims_expired_lease(db: Session) -> None:
+    _, _, job = create_uploaded_document(db)
+    job.status = "running"
+    job.locked_by = "worker-1"
+    job.locked_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db.commit()
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-2",
+        lease_seconds=300,
+    )
+
+    assert claimed_job.id == job.id
+    assert claimed_job.status == "running"
+    assert claimed_job.locked_by == "worker-2"
+    assert claimed_job.lease_expires_at is not None
+
+
+def test_claim_next_ingestion_job_retries_failed_job_before_max_retries(
+    db: Session,
+) -> None:
+    _, _, job = create_uploaded_document(db)
+    failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=job,
+        error_type="ValueError",
+        error_message="Temporary parser failure",
+    )
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    assert failed_job.retry_count == 1
+    assert claimed_job.id == job.id
+    assert claimed_job.status == "running"
+    assert claimed_job.error_type is None
+    assert claimed_job.next_retry_at is None
+
+
+def test_claim_next_ingestion_job_skips_failed_job_after_max_retries(
+    db: Session,
+) -> None:
+    _, _, job = create_uploaded_document(db)
+    job.retry_count = job.max_retries
+    job.status = "failed"
+    job.next_retry_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db.commit()
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    assert claimed_job is None
 
 
 def test_ingestion_job_failure_records_error(db: Session) -> None:
@@ -125,6 +275,9 @@ def test_ingestion_job_failure_records_error(db: Session) -> None:
     assert failed_job.error_type == "ValueError"
     assert failed_job.error_message == "Unsupported file type"
     assert failed_job.retry_count == 1
+    assert failed_job.locked_by is None
+    assert failed_job.lease_expires_at is None
+    assert failed_job.next_retry_at is not None
 
 
 def test_replace_document_chunks_persists_chunks_and_copies_acl(db: Session) -> None:

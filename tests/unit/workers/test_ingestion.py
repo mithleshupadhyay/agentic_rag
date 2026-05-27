@@ -21,6 +21,7 @@ from agentic_rag.shared.schemas.documents import (
 from agentic_rag.workers.ingestion import (
     decode_text_document,
     process_ingestion_job,
+    run_ingestion_worker_once,
     split_text_into_chunks,
 )
 
@@ -162,6 +163,46 @@ def test_process_ingestion_job_reads_object_and_stores_chunks(db: Session) -> No
     assert len(stored_chunks) == 1
     assert stored_chunks[0].content.startswith("# Security Policy")
     assert stored_chunks[0].acl.allowed_user_ids == ["user-1"]
+    assert object_store.read_keys == [document.object_key]
+
+
+def test_run_ingestion_worker_once_claims_and_processes_job(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document, job = create_job(db)
+    object_store = FakeObjectStore(
+        b"# Access Policy\n\nTenant scoped documents must stay isolated."
+    )
+
+    class ExistingSessionContext:
+        def __enter__(self):
+            return db
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def get_session_factory():
+        return ExistingSessionContext
+
+    monkeypatch.setattr(
+        "agentic_rag.workers.ingestion.get_sync_session_factory",
+        get_session_factory,
+    )
+
+    processed = run_ingestion_worker_once(object_store=object_store)
+    stored_job = db.get(IngestionJob, job.id)
+    stored_chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document.id)
+        .all()
+    )
+
+    assert processed is True
+    assert stored_job.status == "completed"
+    assert stored_job.locked_by is None
+    assert stored_job.lease_expires_at is None
+    assert len(stored_chunks) == 1
     assert object_store.read_keys == [document.object_key]
 
 

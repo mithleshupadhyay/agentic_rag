@@ -57,6 +57,16 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     error_type: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
+    locked_by: Mapped[str | None] = mapped_column(String(128), index=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+    )
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+    )
     idempotency_key: Mapped[str | None] = mapped_column(String(128))
     metadata_: Mapped[JsonDict] = mapped_column(
         "metadata",
@@ -80,4 +90,16 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_ingestion_jobs_tenant_status", "tenant_id", "status"),
         Index("ix_ingestion_jobs_tenant_stage", "tenant_id", "current_stage"),
         Index("ix_ingestion_jobs_tenant_created", "tenant_id", "created_at"),
+        Index(
+            "ix_ingestion_jobs_tenant_status_lease",
+            "tenant_id",
+            "status",
+            "lease_expires_at",
+        ),
+        Index(
+            "ix_ingestion_jobs_tenant_status_retry",
+            "tenant_id",
+            "status",
+            "next_retry_at",
+        ),
     )

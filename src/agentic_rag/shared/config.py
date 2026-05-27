@@ -56,6 +56,11 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias="INGESTION_WORKER_POLL_SECONDS",
     )
+    ingestion_worker_lease_seconds: int = Field(
+        default=300,
+        ge=30,
+        validation_alias="INGESTION_WORKER_LEASE_SECONDS",
+    )
     ingestion_chunk_size: int = Field(
         default=2000,
         ge=100,

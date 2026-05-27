@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.ingestion import (
-    get_next_queued_ingestion_job,
+    claim_next_ingestion_job,
     mark_ingestion_job_completed,
     mark_ingestion_job_failed,
     mark_ingestion_job_running,
@@ -23,6 +23,9 @@ from agentic_rag.storage.object_store import ObjectStoreClient
 
 
 logger = logging.getLogger(__name__)
+
+
+INGESTION_WORKER_ID = "ingestion-worker"
 
 
 TEXT_FILE_EXTENSIONS = {
@@ -162,7 +165,13 @@ def process_ingestion_job(
             raise ValueError(f"Ingestion job {job.id} has no object key")
         object_key = job.object_key
 
-        job = mark_ingestion_job_running(db, job)
+        if job.status != "running":
+            job = mark_ingestion_job_running(
+                db=db,
+                job=job,
+                worker_id=INGESTION_WORKER_ID,
+                lease_seconds=settings.ingestion_worker_lease_seconds,
+            )
         document = update_document_ingestion_status(db, document, "parsing")
 
         raw_data = object_store.get_bytes(object_key)
@@ -214,7 +223,11 @@ def run_ingestion_worker_once(
 ) -> bool:
     SessionLocal = get_sync_session_factory()
     with SessionLocal() as db:
-        job = get_next_queued_ingestion_job(db)
+        job = claim_next_ingestion_job(
+            db=db,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
         if not job:
             return False
 

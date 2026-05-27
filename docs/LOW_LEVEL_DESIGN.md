@@ -414,6 +414,11 @@ ingestion_jobs
 - idempotency_key
 - current_stage
 - retry_count
+- max_retries
+- locked_by
+- locked_at
+- lease_expires_at
+- next_retry_at
 - error_type
 - error_message
 - created_by
