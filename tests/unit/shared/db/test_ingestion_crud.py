@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import (
     attach_document_object,
@@ -231,6 +232,8 @@ def test_claim_next_ingestion_job_retries_failed_job_before_max_retries(
         error_type="ValueError",
         error_message="Temporary parser failure",
     )
+    failed_job.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
 
     claimed_job = claim_next_ingestion_job(
         db=db,
@@ -243,6 +246,28 @@ def test_claim_next_ingestion_job_retries_failed_job_before_max_retries(
     assert claimed_job.status == "running"
     assert claimed_job.error_type is None
     assert claimed_job.next_retry_at is None
+
+
+def test_claim_next_ingestion_job_skips_failed_job_before_retry_time(
+    db: Session,
+) -> None:
+    _, _, job = create_uploaded_document(db)
+    failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=job,
+        error_type="ValueError",
+        error_message="Temporary parser failure",
+    )
+
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    assert failed_job.retry_count == 1
+    assert failed_job.next_retry_at is not None
+    assert claimed_job is None
 
 
 def test_claim_next_ingestion_job_skips_failed_job_after_max_retries(
@@ -261,6 +286,53 @@ def test_claim_next_ingestion_job_skips_failed_job_after_max_retries(
     )
 
     assert claimed_job is None
+
+
+def test_ingestion_job_failure_uses_capped_exponential_backoff(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, job = create_uploaded_document(db)
+    job.max_retries = 10
+    db.commit()
+    monkeypatch.setattr(settings, "ingestion_retry_base_seconds", 10)
+    monkeypatch.setattr(settings, "ingestion_retry_max_seconds", 25)
+
+    first_failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=job,
+        error_type="ValueError",
+        error_message="First parser failure",
+    )
+    first_delay_seconds = (
+        first_failed_job.next_retry_at - first_failed_job.completed_at
+    ).total_seconds()
+
+    second_failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=first_failed_job,
+        error_type="ValueError",
+        error_message="Second parser failure",
+    )
+    second_delay_seconds = (
+        second_failed_job.next_retry_at - second_failed_job.completed_at
+    ).total_seconds()
+
+    second_failed_job.retry_count = 5
+    db.commit()
+    capped_failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=second_failed_job,
+        error_type="ValueError",
+        error_message="Repeated parser failure",
+    )
+    capped_delay_seconds = (
+        capped_failed_job.next_retry_at - capped_failed_job.completed_at
+    ).total_seconds()
+
+    assert first_delay_seconds == pytest.approx(10, abs=1)
+    assert second_delay_seconds == pytest.approx(20, abs=1)
+    assert capped_delay_seconds == pytest.approx(25, abs=1)
 
 
 def test_renew_ingestion_job_lease_extends_owned_running_job(db: Session) -> None:
@@ -322,6 +394,8 @@ def test_ingestion_job_failure_records_error(db: Session) -> None:
     assert failed_job.locked_by is None
     assert failed_job.lease_expires_at is None
     assert failed_job.next_retry_at is not None
+    assert failed_job.completed_at is not None
+    assert failed_job.next_retry_at > failed_job.completed_at
 
 
 def test_replace_document_chunks_persists_chunks_and_copies_acl(db: Session) -> None:

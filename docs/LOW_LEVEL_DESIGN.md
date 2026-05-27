@@ -1049,6 +1049,8 @@ topic
 retry_topic
 dlq_topic
 max_retries
+retry_backoff_base_seconds
+retry_backoff_max_seconds
 step_timeout_seconds
 max_concurrency
 lock_ttl_seconds

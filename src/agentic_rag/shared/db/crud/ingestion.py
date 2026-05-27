@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.models import ChunkAcl, Document, DocumentChunk, IngestionJob
 
 
@@ -258,13 +259,22 @@ def mark_ingestion_job_failed(
     job.error_type = error_type[:128]
     job.error_message = error_message
     job.retry_count = (job.retry_count or 0) + 1
-    job.completed_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    job.completed_at = now
     job.locked_by = None
     job.locked_at = None
     job.lease_expires_at = None
-    job.next_retry_at = (
-        datetime.now(timezone.utc) if job.retry_count < job.max_retries else None
-    )
+    if job.retry_count < job.max_retries:
+        retry_delay_seconds = settings.ingestion_retry_base_seconds * (
+            2 ** max(0, job.retry_count - 1)
+        )
+        retry_delay_seconds = min(
+            retry_delay_seconds,
+            settings.ingestion_retry_max_seconds,
+        )
+        job.next_retry_at = now + timedelta(seconds=retry_delay_seconds)
+    else:
+        job.next_retry_at = None
 
     try:
         db.commit()

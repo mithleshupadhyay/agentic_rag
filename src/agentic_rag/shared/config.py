@@ -61,6 +61,16 @@ class Settings(BaseSettings):
         ge=30,
         validation_alias="INGESTION_WORKER_LEASE_SECONDS",
     )
+    ingestion_retry_base_seconds: int = Field(
+        default=30,
+        ge=1,
+        validation_alias="INGESTION_RETRY_BASE_SECONDS",
+    )
+    ingestion_retry_max_seconds: int = Field(
+        default=900,
+        ge=1,
+        validation_alias="INGESTION_RETRY_MAX_SECONDS",
+    )
     ingestion_chunk_size: int = Field(
         default=2000,
         ge=100,
