@@ -605,8 +605,11 @@ embedding contract. It also includes tenant-scoped pgvector similarity search
 with model/version filters, deleted-record filtering, optional workspace and
 document filters, and optional user ACL filtering. The vector retrieval service
 now embeds a user query through the provider-neutral LLM gateway, calls this
-pgvector search, and returns authorized vector candidates. Public Retrieval API
-integration is intentionally a separate slice.
+pgvector search, and returns authorized vector candidates. The hybrid retrieval
+service now calls BM25 and vector retrieval, merges duplicate chunks by ID, and
+uses simple rank-based scoring so BM25 and vector scores do not need to share a
+numeric scale. Hybrid API integration, reranking, and context building are
+intentionally separate slices.
 
 ### AgentRunRepository
 
