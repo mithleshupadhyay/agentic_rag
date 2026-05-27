@@ -7,11 +7,14 @@ from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.retrieval.hybrid_search import search_hybrid_chunks
+from agentic_rag.retrieval.reranker import rerank_chunks
 from agentic_rag.retrieval.vector_search import search_vector_chunks
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.retrieval import (
     BM25SearchRequest,
     HybridSearchRequest,
+    RerankRequest,
+    RerankResponse,
     RetrievalResponse,
     VectorSearchRequest,
 )
@@ -69,6 +72,30 @@ def hybrid_search_endpoint(
     logger.info(
         f"[RetrievalAPI] Hybrid search completed tenant={user_context.tenant_id} "
         f"user={user_context.id} candidates={len(response.candidates)}"
+    )
+    return response
+
+
+@router.post("/rerank", response_model=RerankResponse)
+def rerank_endpoint(
+    payload: RerankRequest,
+    user_context: UserContext = Depends(require_scope("query:run")),
+) -> RerankResponse:
+    logger.info(
+        f"[RetrievalAPI] Rerank tenant={user_context.tenant_id} "
+        f"user={user_context.id} candidates={len(payload.candidates)} "
+        f"top_k={payload.top_k}"
+    )
+
+    response = rerank_chunks(
+        query=payload.query,
+        candidates=payload.candidates,
+        top_k=payload.top_k,
+    )
+
+    logger.info(
+        f"[RetrievalAPI] Rerank completed tenant={user_context.tenant_id} "
+        f"user={user_context.id} chunks={len(response.chunks)}"
     )
     return response
 

@@ -803,12 +803,14 @@ Current API endpoint:
 POST /retrieval/bm25-search
 POST /retrieval/vector-search
 POST /retrieval/hybrid-search
+POST /retrieval/rerank
 ```
 
 The API request body must not include tenant or ACL context. The endpoint gets
-`UserContext` from auth dependencies and the retrieval layer converts it into
-tenant, workspace, ACL, deny-rule, and visibility filters before OpenSearch is
-or pgvector search is called.
+`UserContext` from auth dependencies. Search endpoints convert it into tenant,
+workspace, ACL, deny-rule, and visibility filters before OpenSearch or pgvector
+search is called. The rerank endpoint only reorders submitted candidates; it
+does not fetch protected chunks from storage.
 
 ```python
 class BM25SearchRequest(BaseModel):
@@ -832,13 +834,18 @@ class HybridSearchRequest(BaseModel):
     limit: int = 20
     min_similarity: float = 0.0
     deadline_ms: int = 1500
+
+
+class RerankRequest(BaseModel):
+    query: str
+    candidates: list[CandidateChunk]
+    top_k: int = 12
 ```
 
 Future internal retrieval endpoints:
 
 ```text
 POST /internal/v1/retrieval/metadata-search
-POST /internal/v1/retrieval/rerank
 POST /internal/v1/retrieval/context-build
 ```
 

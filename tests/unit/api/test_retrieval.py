@@ -10,6 +10,7 @@ from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
+    RerankResponse,
     RetrievalResponse,
     RetrievalStrategy,
     RetrievalTool,
@@ -417,6 +418,163 @@ def test_hybrid_search_endpoint_validates_request_body() -> None:
             json={
                 "query": "security policy",
                 "limit": 500,
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_rerank_endpoint_returns_reranked_chunks(monkeypatch) -> None:
+    document_id = uuid4()
+    first_chunk_id = uuid4()
+    second_chunk_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        roles=["analyst"],
+        group_ids=["security"],
+        scopes=["query:run"],
+        acl_version=5,
+    )
+    captured = {}
+
+    def fake_rerank_chunks(query, candidates, top_k):
+        captured["query"] = query
+        captured["candidates"] = candidates
+        captured["top_k"] = top_k
+        return RerankResponse(
+            chunks=[
+                CandidateChunk(
+                    chunk_id=second_chunk_id,
+                    document_id=document_id,
+                    content="Security policy encryption controls.",
+                    score=0.93,
+                    source=RetrievalTool.RERANK.value,
+                    metadata={
+                        "original_score": 0.4,
+                        "original_source": RetrievalTool.VECTOR_SEARCH.value,
+                        "rerank_score": 0.93,
+                        "rerank_rank": 1,
+                    },
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=second_chunk_id,
+                        title="Security Policy",
+                        quote="Security policy encryption controls.",
+                        score=0.93,
+                    ),
+                )
+            ],
+            latency_ms=6,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.api.retrieval.rerank_chunks",
+        fake_rerank_chunks,
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/retrieval/rerank",
+            json={
+                "query": "security policy encryption",
+                "top_k": 1,
+                "candidates": [
+                    {
+                        "chunk_id": str(first_chunk_id),
+                        "document_id": str(document_id),
+                        "content": "General onboarding policy.",
+                        "score": 0.8,
+                        "source": "bm25_search",
+                        "metadata": {"retrieval_sources": ["bm25_search"]},
+                    },
+                    {
+                        "chunk_id": str(second_chunk_id),
+                        "document_id": str(document_id),
+                        "content": "Security policy encryption controls.",
+                        "score": 0.4,
+                        "source": "vector_search",
+                        "metadata": {"retrieval_sources": ["vector_search"]},
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latency_ms"] == 6
+    assert body["chunks"][0]["chunk_id"] == str(second_chunk_id)
+    assert body["chunks"][0]["source"] == "rerank"
+    assert body["chunks"][0]["score"] == 0.93
+    assert body["chunks"][0]["metadata"]["original_score"] == 0.4
+    assert body["chunks"][0]["metadata"]["rerank_rank"] == 1
+    assert body["chunks"][0]["citation"]["title"] == "Security Policy"
+    assert captured["query"] == "security policy encryption"
+    assert captured["top_k"] == 1
+    assert [candidate.chunk_id for candidate in captured["candidates"]] == [
+        first_chunk_id,
+        second_chunk_id,
+    ]
+
+
+def test_rerank_endpoint_requires_query_scope() -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        scopes=["documents:read"],
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/retrieval/rerank",
+            json={
+                "query": "security policy",
+                "candidates": [
+                    {
+                        "chunk_id": str(chunk_id),
+                        "document_id": str(document_id),
+                        "content": "Security policy content.",
+                        "score": 0.7,
+                        "source": "bm25_search",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Missing required scope: query:run"
+
+
+def test_rerank_endpoint_validates_request_body() -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        scopes=["query:run"],
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/retrieval/rerank",
+            json={
+                "query": "security policy",
+                "top_k": 0,
+                "candidates": [
+                    {
+                        "chunk_id": str(chunk_id),
+                        "document_id": str(document_id),
+                        "content": "Security policy content.",
+                        "score": 0.7,
+                        "source": "bm25_search",
+                    }
+                ],
             },
         )
 
