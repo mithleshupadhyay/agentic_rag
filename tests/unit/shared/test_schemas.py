@@ -24,8 +24,11 @@ from agentic_rag.shared.schemas.query import (
     QueryRunRead,
     QueryRunStatus,
 )
-from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
-from agentic_rag.shared.schemas.retrieval import BM25SearchRequest
+from agentic_rag.shared.schemas.retrieval import (
+    BM25SearchRequest,
+    RetrievalStrategy,
+    VectorSearchRequest,
+)
 
 
 def test_health_response_contract() -> None:
@@ -170,6 +173,18 @@ def test_bm25_search_request_defaults() -> None:
     assert request.limit == 20
     assert request.filters.document_ids == []
     assert request.deadline_ms == 1500
+
+
+def test_vector_search_request_defaults_and_similarity_validation() -> None:
+    request = VectorSearchRequest(query="Find PCI documents")
+
+    assert request.limit == 20
+    assert request.min_similarity == 0.0
+    assert request.filters.document_ids == []
+    assert request.deadline_ms == 1500
+
+    with pytest.raises(ValidationError):
+        VectorSearchRequest(query="Find PCI documents", min_similarity=1.2)
 
 
 def test_agent_limits_validation() -> None:

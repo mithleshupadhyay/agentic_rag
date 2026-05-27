@@ -788,12 +788,13 @@ Current API endpoint:
 
 ```text
 POST /retrieval/bm25-search
+POST /retrieval/vector-search
 ```
 
 The API request body must not include tenant or ACL context. The endpoint gets
 `UserContext` from auth dependencies and the retrieval layer converts it into
 tenant, workspace, ACL, deny-rule, and visibility filters before OpenSearch is
-called.
+or pgvector search is called.
 
 ```python
 class BM25SearchRequest(BaseModel):
@@ -801,13 +802,20 @@ class BM25SearchRequest(BaseModel):
     filters: RetrievalFilters = RetrievalFilters()
     limit: int = 20
     deadline_ms: int = 1500
+
+
+class VectorSearchRequest(BaseModel):
+    query: str
+    filters: RetrievalFilters = RetrievalFilters()
+    limit: int = 20
+    min_similarity: float = 0.0
+    deadline_ms: int = 1500
 ```
 
 Future internal retrieval endpoints:
 
 ```text
 POST /internal/v1/retrieval/metadata-search
-POST /internal/v1/retrieval/vector-search
 POST /internal/v1/retrieval/hybrid-search
 POST /internal/v1/retrieval/rerank
 POST /internal/v1/retrieval/context-build
