@@ -194,7 +194,7 @@ def test_kafka_event_envelope_and_payload() -> None:
         job_id=uuid4(),
         document_id=uuid4(),
         chunk_ids=[uuid4()],
-        embedding_model="BAAI/bge-base-en-v1.5",
+        embedding_model="gemini/gemini-embedding-001",
     )
     envelope = EventEnvelope(
         event_type=EventType.DOCUMENT_EMBED_REQUESTED,
@@ -204,4 +204,4 @@ def test_kafka_event_envelope_and_payload() -> None:
     )
 
     assert envelope.event_version == 1
-    assert envelope.payload["embedding_model"] == "BAAI/bge-base-en-v1.5"
+    assert envelope.payload["embedding_model"] == "gemini/gemini-embedding-001"

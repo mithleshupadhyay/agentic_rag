@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     )
     embedding_provider: str = Field(default="litellm", validation_alias="EMBEDDING_PROVIDER")
     embedding_model_name: str = Field(
-        default="BAAI/bge-base-en-v1.5",
+        default="gemini/gemini-embedding-001",
         validation_alias="EMBEDDING_MODEL_NAME",
     )
     embedding_dimension: int = Field(

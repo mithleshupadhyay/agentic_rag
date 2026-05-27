@@ -334,7 +334,7 @@ def get_chunks_missing_embedding(
     bind = db.get_bind()
     dialect_name = bind.dialect.name if bind else ""
     if dialect_name == "postgresql":
-        query = query.with_for_update(skip_locked=True)
+        query = query.with_for_update(skip_locked=True, of=DocumentChunk)
 
     chunks = query.all()
     logger.info(

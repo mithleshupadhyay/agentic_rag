@@ -855,7 +855,10 @@ The local gateway supports chat completion and embedding generation through
 LiteLLM. Embedding calls enforce input budget, retry transient provider
 failures, reuse circuit-breaker protection, and validate the returned vector
 dimension against the configured pgvector dimension before workers persist
-vectors.
+vectors. Current local testing uses the Gemini API model
+`gemini-embedding-001`, addressed through LiteLLM as
+`gemini/gemini-embedding-001`, with 768 output dimensions to keep the existing
+pgvector schema.
 
 Configuration:
 
@@ -873,6 +876,10 @@ LLM_CIRCUIT_BREAKER_ENABLED=true
 LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
 LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS=60
 LLM_TIMEOUT_SECONDS=30
+EMBEDDING_PROVIDER=litellm
+EMBEDDING_MODEL_NAME=gemini/gemini-embedding-001
+EMBEDDING_DIMENSION=768
+GEMINI_API_KEY=
 ```
 
 ### AuthZ Service

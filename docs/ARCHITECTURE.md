@@ -90,7 +90,7 @@ This table is the implementation decision for this repository.
 | Authorization | Tenant, role, group, and chunk-level ACL |
 | LLM gateway | LiteLLM |
 | Local LLM runtime | Ollama |
-| Embeddings | Sentence Transformers with `BAAI/bge-base-en-v1.5` |
+| Embeddings | LiteLLM with Gemini `gemini/gemini-embedding-001` for current local testing; pgvector stores model/versioned vectors |
 | Reranker | `BAAI/bge-reranker-base` |
 | Observability | OpenTelemetry, Prometheus, Grafana, Loki |
 | Local runtime | Docker, Docker Compose, Makefile |

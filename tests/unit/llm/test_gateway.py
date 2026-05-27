@@ -495,6 +495,43 @@ def test_generate_embeddings_calls_litellm(monkeypatch) -> None:
     assert response.dimension == 768
 
 
+def test_generate_embeddings_sends_dimensions_for_gemini(monkeypatch) -> None:
+    captured = {}
+
+    def fake_embedding(**kwargs):
+        captured.update(kwargs)
+        return FakeEmbeddingResponse(count=1)
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_embedding", fake_embedding)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_provider", "litellm")
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.embedding_model_name",
+        "gemini/gemini-embedding-001",
+    )
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_dimension", 768)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_timeout_seconds", 12)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+
+    response = generate_embeddings(
+        EmbeddingRequest(
+            auth=AuthContext(
+                user_id="embedding-worker",
+                tenant_id="tenant-a",
+                token_type=TokenType.SERVICE,
+            ),
+            texts=["first chunk"],
+        )
+    )
+
+    assert captured["model"] == "gemini/gemini-embedding-001"
+    assert captured["dimensions"] == 768
+    assert response.dimension == 768
+
+
 def test_generate_embeddings_rejects_input_over_budget(monkeypatch) -> None:
     def fake_embedding(**kwargs):
         raise AssertionError("Provider should not be called for over-budget input.")

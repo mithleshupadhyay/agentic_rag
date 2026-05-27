@@ -246,6 +246,8 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         "input": request.texts,
         "timeout": timeout_seconds,
     }
+    if model.startswith("gemini/"):
+        embedding_kwargs["dimensions"] = settings.embedding_dimension
 
     api_key = settings.llm_api_key or settings.litellm_api_key
     if api_key:
