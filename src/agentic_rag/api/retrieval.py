@@ -6,10 +6,12 @@ from sqlalchemy.orm import Session
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
+from agentic_rag.retrieval.hybrid_search import search_hybrid_chunks
 from agentic_rag.retrieval.vector_search import search_vector_chunks
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.retrieval import (
     BM25SearchRequest,
+    HybridSearchRequest,
     RetrievalResponse,
     VectorSearchRequest,
 )
@@ -39,6 +41,33 @@ def bm25_search_endpoint(
 
     logger.info(
         f"[RetrievalAPI] BM25 search completed tenant={user_context.tenant_id} "
+        f"user={user_context.id} candidates={len(response.candidates)}"
+    )
+    return response
+
+
+@router.post("/hybrid-search", response_model=RetrievalResponse)
+def hybrid_search_endpoint(
+    payload: HybridSearchRequest,
+    db: Session = Depends(get_session),
+    user_context: UserContext = Depends(require_scope("query:run")),
+) -> RetrievalResponse:
+    logger.info(
+        f"[RetrievalAPI] Hybrid search tenant={user_context.tenant_id} "
+        f"user={user_context.id} limit={payload.limit}"
+    )
+
+    response = search_hybrid_chunks(
+        db=db,
+        user_context=user_context,
+        query=payload.query,
+        filters=payload.filters,
+        limit=payload.limit,
+        min_similarity=payload.min_similarity,
+    )
+
+    logger.info(
+        f"[RetrievalAPI] Hybrid search completed tenant={user_context.tenant_id} "
         f"user={user_context.id} candidates={len(response.candidates)}"
     )
     return response

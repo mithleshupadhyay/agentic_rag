@@ -792,6 +792,7 @@ Current API endpoint:
 ```text
 POST /retrieval/bm25-search
 POST /retrieval/vector-search
+POST /retrieval/hybrid-search
 ```
 
 The API request body must not include tenant or ACL context. The endpoint gets
@@ -813,13 +814,20 @@ class VectorSearchRequest(BaseModel):
     limit: int = 20
     min_similarity: float = 0.0
     deadline_ms: int = 1500
+
+
+class HybridSearchRequest(BaseModel):
+    query: str
+    filters: RetrievalFilters = RetrievalFilters()
+    limit: int = 20
+    min_similarity: float = 0.0
+    deadline_ms: int = 1500
 ```
 
 Future internal retrieval endpoints:
 
 ```text
 POST /internal/v1/retrieval/metadata-search
-POST /internal/v1/retrieval/hybrid-search
 POST /internal/v1/retrieval/rerank
 POST /internal/v1/retrieval/context-build
 ```

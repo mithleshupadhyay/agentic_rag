@@ -55,6 +55,14 @@ class VectorSearchRequest(APIModel):
     deadline_ms: int = Field(default=1500, ge=100)
 
 
+class HybridSearchRequest(APIModel):
+    query: str = Field(..., min_length=1)
+    filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
+    limit: int = Field(default=20, ge=1, le=200)
+    min_similarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    deadline_ms: int = Field(default=1500, ge=100)
+
+
 class CandidateDocument(APIModel):
     document_id: UUID
     score: float = Field(..., ge=0.0)

@@ -26,6 +26,7 @@ from agentic_rag.shared.schemas.query import (
 )
 from agentic_rag.shared.schemas.retrieval import (
     BM25SearchRequest,
+    HybridSearchRequest,
     RetrievalStrategy,
     VectorSearchRequest,
 )
@@ -185,6 +186,18 @@ def test_vector_search_request_defaults_and_similarity_validation() -> None:
 
     with pytest.raises(ValidationError):
         VectorSearchRequest(query="Find PCI documents", min_similarity=1.2)
+
+
+def test_hybrid_search_request_defaults_and_similarity_validation() -> None:
+    request = HybridSearchRequest(query="Find PCI documents")
+
+    assert request.limit == 20
+    assert request.min_similarity == 0.0
+    assert request.filters.document_ids == []
+    assert request.deadline_ms == 1500
+
+    with pytest.raises(ValidationError):
+        HybridSearchRequest(query="Find PCI documents", min_similarity=1.2)
 
 
 def test_agent_limits_validation() -> None:

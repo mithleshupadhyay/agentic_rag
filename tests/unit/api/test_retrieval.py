@@ -287,3 +287,137 @@ def test_vector_search_endpoint_validates_request_body() -> None:
         )
 
     assert response.status_code == 422
+
+
+def test_hybrid_search_endpoint_returns_authorized_candidates(monkeypatch) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    db = object()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        roles=["analyst"],
+        group_ids=["security"],
+        scopes=["query:run"],
+        acl_version=5,
+    )
+    captured = {}
+
+    def fake_search_hybrid_chunks(
+        db,
+        user_context,
+        query,
+        filters,
+        limit,
+        min_similarity,
+    ):
+        captured["db"] = db
+        captured["user_context"] = user_context
+        captured["query"] = query
+        captured["filters"] = filters
+        captured["limit"] = limit
+        captured["min_similarity"] = min_similarity
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.HYBRID,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Hybrid security policy content.",
+                    score=1.0,
+                    source=RetrievalStrategy.HYBRID.value,
+                    metadata={
+                        "retrieval_sources": ["bm25_search", "vector_search"],
+                        "bm25_score": 12.0,
+                        "vector_score": 0.92,
+                    },
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Hybrid security policy content.",
+                        score=1.0,
+                    ),
+                )
+            ],
+            latency_ms=24,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.api.retrieval.search_hybrid_chunks",
+        fake_search_hybrid_chunks,
+    )
+
+    for client in client_with_user_and_db(user_context, db):
+        response = client.post(
+            "/retrieval/hybrid-search",
+            json={
+                "query": "security policy",
+                "filters": {
+                    "workspace_id": "workspace-a",
+                    "document_ids": [str(document_id)],
+                },
+                "limit": 7,
+                "min_similarity": 0.65,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["strategy"] == "hybrid"
+    assert body["latency_ms"] == 24
+    assert body["candidates"][0]["chunk_id"] == str(chunk_id)
+    assert body["candidates"][0]["source"] == "hybrid"
+    assert body["candidates"][0]["score"] == 1.0
+    assert body["candidates"][0]["metadata"]["retrieval_sources"] == [
+        "bm25_search",
+        "vector_search",
+    ]
+    assert body["candidates"][0]["citation"]["title"] == "Security Policy"
+    assert captured["db"] is db
+    assert captured["user_context"].id == "user-1"
+    assert captured["query"] == "security policy"
+    assert captured["filters"].workspace_id == "workspace-a"
+    assert captured["filters"].document_ids == [document_id]
+    assert captured["limit"] == 7
+    assert captured["min_similarity"] == 0.65
+
+
+def test_hybrid_search_endpoint_requires_query_scope() -> None:
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        scopes=["documents:read"],
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/retrieval/hybrid-search",
+            json={"query": "security policy"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Missing required scope: query:run"
+
+
+def test_hybrid_search_endpoint_validates_request_body() -> None:
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        scopes=["query:run"],
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/retrieval/hybrid-search",
+            json={
+                "query": "security policy",
+                "limit": 500,
+            },
+        )
+
+    assert response.status_code == 422
