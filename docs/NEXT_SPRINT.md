@@ -46,6 +46,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
+| `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add public API endpoint integration, source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
 | `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and full local smoke tests against PostgreSQL/pgvector. | High |
@@ -77,6 +78,7 @@ retrieval quality, and production operations.
 | `tests/unit/query/test_answer_verifier.py` | Deterministic answer verifier tests for valid citations, missing citations, unknown citations, and no-context behavior. | Add quote-level grounding and confidence scoring tests when verifier logic becomes richer. | High |
 | `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs, metric accounting, and answer-verification fallback. | Add cache/fallback, synthesis handoff edge cases, and no-result response behavior tests. | High |
 | `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests. | Add score threshold, metadata/date filters, no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
+| `tests/unit/retrieval/test_vector_search.py` | Provider-neutral vector retrieval service tests with mocked embedding and pgvector search calls. | Add API endpoint tests, Docker-backed pgvector smoke tests, and richer filter coverage when vector filtering expands. | High |
 | `tests/unit/retrieval/test_context_builder.py` | Context builder tests. | Add adjacent chunk grouping, stronger truncation edge cases, per-document caps, and citation ordering tests. | High |
 | `tests/unit/storage/test_object_store.py` | Object storage tests. | Add mocked error handling tests, metadata tests, streaming upload tests, and local MinIO integration tests later. | Medium |
 | `tests/unit/workers/test_indexing.py` | BM25 indexing worker tests. | Add retry/DLQ, worker loop shutdown, batch sizing, and per-tenant selection tests. | Medium |
@@ -86,7 +88,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add vector retrieval service/API that embeds the query, calls pgvector search, and returns authorized vector candidates. |
+| 1 | Add vector retrieval API endpoint that calls the provider-neutral vector retrieval service and returns authorized vector candidates. |
 | 2 | Add hybrid retrieval service: metadata, BM25, vector, merge, ACL filter, rerank, context build. |
 | 3 | Add reranker integration and retrieval quality scoring. |
 | 4 | Add Redis/Kafka-backed worker scheduling, retries, leases, and DLQ handling. |

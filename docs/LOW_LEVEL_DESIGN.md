@@ -603,8 +603,10 @@ same-hash writes, stale content-hash updates, dimension checks, chunk selection
 for missing embeddings, and a local embedding worker that calls the LLM gateway
 embedding contract. It also includes tenant-scoped pgvector similarity search
 with model/version filters, deleted-record filtering, optional workspace and
-document filters, and optional user ACL filtering. Retrieval API integration is
-intentionally a separate slice.
+document filters, and optional user ACL filtering. The vector retrieval service
+now embeds a user query through the provider-neutral LLM gateway, calls this
+pgvector search, and returns authorized vector candidates. Public Retrieval API
+integration is intentionally a separate slice.
 
 ### AgentRunRepository
 
