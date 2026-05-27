@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ from agentic_rag.shared.db.crud.ingestion import (
     mark_ingestion_job_failed,
     mark_ingestion_job_running,
     replace_document_chunks,
+    renew_ingestion_job_lease,
     update_ingestion_job_stage,
 )
 from agentic_rag.shared.db.models import ChunkAcl, DocumentChunk, Tenant
@@ -259,6 +261,48 @@ def test_claim_next_ingestion_job_skips_failed_job_after_max_retries(
     )
 
     assert claimed_job is None
+
+
+def test_renew_ingestion_job_lease_extends_owned_running_job(db: Session) -> None:
+    _, _, _ = create_uploaded_document(db)
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    renewed_job = renew_ingestion_job_lease(
+        db=db,
+        job=claimed_job,
+        worker_id="worker-1",
+        lease_seconds=600,
+    )
+
+    assert renewed_job.status == "running"
+    assert renewed_job.locked_by == "worker-1"
+    assert renewed_job.locked_at is not None
+    assert renewed_job.lease_expires_at is not None
+
+
+def test_renew_ingestion_job_lease_rejects_other_worker(db: Session) -> None:
+    _, _, _ = create_uploaded_document(db)
+    claimed_job = claim_next_ingestion_job(
+        db=db,
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        renew_ingestion_job_lease(
+            db=db,
+            job=claimed_job,
+            worker_id="worker-2",
+            lease_seconds=600,
+        )
+
+    db.refresh(claimed_job)
+    assert exc_info.value.status_code == 409
+    assert claimed_job.locked_by == "worker-1"
 
 
 def test_ingestion_job_failure_records_error(db: Session) -> None:

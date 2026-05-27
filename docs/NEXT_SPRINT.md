@@ -35,7 +35,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/acl.py` | Document and chunk ACL models. | Add policy versioning, inherited ACLs, group expansion snapshots, deny rules, and efficient indexes for retrieval-time chunk filtering. | High |
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model with retry count, max retries, worker lock fields, lease expiry, and next retry timestamp. | Add stage timestamps, retry backoff strategy, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
-| `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, expired lease reclaim, retry eligibility, and lock cleanup on completion/failure. | Add retry backoff delay calculation, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
+| `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, retry eligibility, and lock cleanup on completion/failure. | Add retry backoff delay calculation, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
 | `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, and vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, Redis/Kafka scheduling, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
@@ -53,7 +53,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
 | `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and full local smoke tests against PostgreSQL/pgvector. | High |
-| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, parses text uploads, writes chunks, and clears locks on completion/failure. | Add graceful shutdown, retry/DLQ publishing, queue-backed scheduling, lease renewal during long parsing, and per-tenant ingestion quotas. | High |
+| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, renews the lease between processing stages, parses text uploads, writes chunks, and clears locks on completion/failure. | Add graceful shutdown, retry/DLQ publishing, queue-backed scheduling, and per-tenant ingestion quotas. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -94,7 +94,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add Redis/Kafka-backed worker scheduling, retry/DLQ event publishing, lease renewal, and worker metrics around the DB-backed claim flow. |
+| 1 | Add Redis/Kafka-backed worker scheduling, retry/DLQ event publishing, and worker metrics around the DB-backed claim flow. |
 | 2 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
 | 3 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 4 | Add streaming query responses and query-run cancellation. |

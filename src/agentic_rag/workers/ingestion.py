@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from agentic_rag.shared.config import settings
@@ -14,6 +15,7 @@ from agentic_rag.shared.db.crud.ingestion import (
     mark_ingestion_job_failed,
     mark_ingestion_job_running,
     replace_document_chunks,
+    renew_ingestion_job_lease,
     update_document_ingestion_status,
     update_ingestion_job_stage,
 )
@@ -172,9 +174,21 @@ def process_ingestion_job(
                 worker_id=INGESTION_WORKER_ID,
                 lease_seconds=settings.ingestion_worker_lease_seconds,
             )
+        job = renew_ingestion_job_lease(
+            db=db,
+            job=job,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
         document = update_document_ingestion_status(db, document, "parsing")
 
         raw_data = object_store.get_bytes(object_key)
+        job = renew_ingestion_job_lease(
+            db=db,
+            job=job,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
         text = decode_text_document(
             data=raw_data,
             file_name=document.file_name,
@@ -182,8 +196,20 @@ def process_ingestion_job(
         )
 
         job = update_ingestion_job_stage(db, job, "chunk")
+        job = renew_ingestion_job_lease(
+            db=db,
+            job=job,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
         document = update_document_ingestion_status(db, document, "indexing")
         chunks = split_text_into_chunks(text)
+        job = renew_ingestion_job_lease(
+            db=db,
+            job=job,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
         chunk_payloads = [
             {
                 "chunk_index": chunk.chunk_index,
@@ -203,6 +229,25 @@ def process_ingestion_job(
             f"[IngestionWorker] Completed ingestion job {job.id} "
             f"document={document.id} chunks={len(chunk_payloads)}"
         )
+        return job
+
+    except HTTPException as e:
+        if e.status_code == 409:
+            logger.warning(
+                f"[IngestionWorker] Lost ingestion job lease {job.id}; "
+                "skipping failure update"
+            )
+            return job
+
+        logger.exception(f"[IngestionWorker] Failed ingestion job {job.id}: {e}")
+        mark_ingestion_job_failed(
+            db=db,
+            job=job,
+            error_type=type(e).__name__,
+            error_message=str(e.detail),
+        )
+        if isinstance(document, Document):
+            update_document_ingestion_status(db, document, "failed")
         return job
 
     except Exception as e:

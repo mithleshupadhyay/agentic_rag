@@ -144,6 +144,59 @@ def mark_ingestion_job_running(
         )
 
 
+def renew_ingestion_job_lease(
+    db: Session,
+    job: IngestionJob,
+    worker_id: str,
+    lease_seconds: int,
+) -> IngestionJob:
+    logger.info(f"[DB] Renewing ingestion job {job.id} lease worker={worker_id}")
+    query = db.query(IngestionJob).populate_existing().filter(IngestionJob.id == job.id)
+
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind else ""
+    if dialect_name == "postgresql":
+        query = query.with_for_update()
+
+    db_job = query.first()
+    if not db_job:
+        logger.warning(f"[DB] Cannot renew missing ingestion job {job.id}")
+        raise HTTPException(
+            status_code=404,
+            detail="Ingestion job not found.",
+        )
+    if db_job.status != "running" or db_job.locked_by != worker_id:
+        logger.warning(
+            f"[DB] Cannot renew ingestion job {job.id}; "
+            f"status={db_job.status} locked_by={db_job.locked_by}"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Ingestion job lease is no longer owned by this worker.",
+        )
+
+    now = datetime.now(timezone.utc)
+    db_job.locked_at = now
+    db_job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+
+    try:
+        db.commit()
+        db.refresh(db_job)
+        logger.info(
+            f"[DB] Renewed ingestion job {db_job.id} "
+            f"lease_expires_at={db_job.lease_expires_at}"
+        )
+        return db_job
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to renew ingestion job {job.id} lease: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during ingestion job lease renewal.",
+        )
+
+
 def update_ingestion_job_stage(
     db: Session,
     job: IngestionJob,

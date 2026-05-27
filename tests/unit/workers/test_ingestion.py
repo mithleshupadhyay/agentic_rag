@@ -11,6 +11,9 @@ from agentic_rag.shared.db.crud.documents import (
     create_document,
     create_ingestion_job_for_document,
 )
+from agentic_rag.shared.db.crud.ingestion import (
+    renew_ingestion_job_lease as real_renew_ingestion_job_lease,
+)
 from agentic_rag.shared.db.models import Document, DocumentChunk, IngestionJob, Tenant
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import (
@@ -204,6 +207,65 @@ def test_run_ingestion_worker_once_claims_and_processes_job(
     assert stored_job.lease_expires_at is None
     assert len(stored_chunks) == 1
     assert object_store.read_keys == [document.object_key]
+
+
+def test_process_ingestion_job_renews_lease_between_steps(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, job = create_job(db)
+    object_store = FakeObjectStore(
+        b"# Security Policy\n\nOnly authorized users can read this policy.\n"
+        b"Every document must be tenant scoped."
+    )
+    renewed_stages = []
+
+    def renew_lease_spy(
+        db: Session,
+        job: IngestionJob,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> IngestionJob:
+        renewed_stages.append(job.current_stage)
+        return real_renew_ingestion_job_lease(
+            db=db,
+            job=job,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.workers.ingestion.renew_ingestion_job_lease",
+        renew_lease_spy,
+    )
+
+    process_ingestion_job(
+        db=db,
+        job=job,
+        object_store=object_store,
+    )
+
+    assert renewed_stages == ["parse", "parse", "chunk", "chunk"]
+
+
+def test_process_ingestion_job_does_not_fail_job_after_lost_lease(
+    db: Session,
+) -> None:
+    _, job = create_job(db)
+    job.status = "running"
+    job.locked_by = "other-worker"
+    db.commit()
+
+    process_ingestion_job(
+        db=db,
+        job=job,
+        object_store=FakeObjectStore(b"# Security Policy"),
+    )
+    stored_job = db.get(IngestionJob, job.id)
+
+    assert stored_job.status == "running"
+    assert stored_job.locked_by == "other-worker"
+    assert stored_job.error_type is None
 
 
 def test_process_ingestion_job_marks_failed_for_unsupported_file(db: Session) -> None:

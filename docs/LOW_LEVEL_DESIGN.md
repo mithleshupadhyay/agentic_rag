@@ -1033,6 +1033,7 @@ validate EventEnvelope
 check idempotency
 acquire distributed lock
 process payload
+renew lock before long-running stages finish
 write status and outputs
 publish next event
 commit offset only after success
