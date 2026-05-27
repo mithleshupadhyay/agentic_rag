@@ -608,8 +608,16 @@ now embeds a user query through the provider-neutral LLM gateway, calls this
 pgvector search, and returns authorized vector candidates. The hybrid retrieval
 service now calls BM25 and vector retrieval, merges duplicate chunks by ID, and
 uses simple rank-based scoring so BM25 and vector scores do not need to share a
-numeric scale. Hybrid API integration, reranking, and context building are
-intentionally separate slices.
+numeric scale. The reranker service now applies deterministic, provider-neutral
+query-to-candidate scoring, preserves original retrieval score/source metadata,
+and returns a bounded reranked candidate list. Model-backed reranking, hybrid
+reranker handoff, and context building are intentionally separate slices.
+
+Core reranker method:
+
+```python
+rerank_chunks(query, candidates, top_k) -> RerankResponse
+```
 
 ### AgentRunRepository
 
