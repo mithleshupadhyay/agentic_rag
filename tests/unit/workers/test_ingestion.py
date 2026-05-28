@@ -15,6 +15,8 @@ from agentic_rag.shared.db.crud.ingestion import (
     renew_ingestion_job_lease as real_renew_ingestion_job_lease,
 )
 from agentic_rag.shared.db.models import Document, DocumentChunk, IngestionJob, Tenant
+from agentic_rag.shared.kafka.events import EventEnvelope, EventType
+from agentic_rag.shared.kafka.topics import DLQ_INGESTION, RETRY_INGESTION
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
@@ -37,6 +39,14 @@ class FakeObjectStore:
     def get_bytes(self, object_key: str) -> bytes:
         self.read_keys.append(object_key)
         return self.data
+
+
+class FakeEventPublisher:
+    def __init__(self):
+        self.published = []
+
+    def __call__(self, topic: str, envelope: EventEnvelope) -> None:
+        self.published.append((topic, envelope))
 
 
 @pytest.fixture()
@@ -252,6 +262,7 @@ def test_process_ingestion_job_does_not_fail_job_after_lost_lease(
     db: Session,
 ) -> None:
     _, job = create_job(db)
+    event_publisher = FakeEventPublisher()
     job.status = "running"
     job.locked_by = "other-worker"
     db.commit()
@@ -260,26 +271,32 @@ def test_process_ingestion_job_does_not_fail_job_after_lost_lease(
         db=db,
         job=job,
         object_store=FakeObjectStore(b"# Security Policy"),
+        event_publisher=event_publisher,
     )
     stored_job = db.get(IngestionJob, job.id)
 
     assert stored_job.status == "running"
     assert stored_job.locked_by == "other-worker"
     assert stored_job.error_type is None
+    assert event_publisher.published == []
 
 
-def test_process_ingestion_job_marks_failed_for_unsupported_file(db: Session) -> None:
+def test_process_ingestion_job_publishes_retry_event_for_retryable_failure(
+    db: Session,
+) -> None:
     document, job = create_job(
         db=db,
         file_name="policy.pdf",
         mime_type="application/pdf",
     )
     object_store = FakeObjectStore(b"%PDF-1.7")
+    event_publisher = FakeEventPublisher()
 
     process_ingestion_job(
         db=db,
         job=job,
         object_store=object_store,
+        event_publisher=event_publisher,
     )
     stored_document = db.get(Document, document.id)
     stored_job = db.get(IngestionJob, job.id)
@@ -288,3 +305,57 @@ def test_process_ingestion_job_marks_failed_for_unsupported_file(db: Session) ->
     assert stored_job.status == "failed"
     assert stored_job.error_type == "ValueError"
     assert "Unsupported ingestion file type" in stored_job.error_message
+    assert stored_job.next_retry_at is not None
+    assert len(event_publisher.published) == 1
+
+    topic, envelope = event_publisher.published[0]
+    assert topic == RETRY_INGESTION
+    assert envelope.event_type == EventType.INGESTION_RETRY_SCHEDULED
+    assert envelope.tenant_id == "tenant-a"
+    assert envelope.workspace_id == "workspace-a"
+    assert envelope.correlation_id == str(job.id)
+    assert envelope.idempotency_key == f"ingestion-retry:{job.id}:1"
+    assert envelope.payload["job_id"] == str(job.id)
+    assert envelope.payload["document_id"] == str(document.id)
+    assert envelope.payload["retry_topic"] == RETRY_INGESTION
+    assert envelope.payload["attempt"] == 1
+    assert envelope.payload["max_attempts"] == stored_job.max_retries
+    assert envelope.payload["error_type"] == "ValueError"
+    assert envelope.payload["metadata"]["worker_id"] == "ingestion-worker"
+
+
+def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
+    db: Session,
+) -> None:
+    document, job = create_job(
+        db=db,
+        file_name="policy.pdf",
+        mime_type="application/pdf",
+    )
+    job.retry_count = job.max_retries - 1
+    db.commit()
+    object_store = FakeObjectStore(b"%PDF-1.7")
+    event_publisher = FakeEventPublisher()
+
+    process_ingestion_job(
+        db=db,
+        job=job,
+        object_store=object_store,
+        event_publisher=event_publisher,
+    )
+    stored_job = db.get(IngestionJob, job.id)
+
+    assert stored_job.status == "failed"
+    assert stored_job.retry_count == stored_job.max_retries
+    assert stored_job.next_retry_at is None
+    assert len(event_publisher.published) == 1
+
+    topic, envelope = event_publisher.published[0]
+    assert topic == DLQ_INGESTION
+    assert envelope.event_type == EventType.INGESTION_DLQ_RECORDED
+    assert envelope.idempotency_key == f"ingestion-dlq:{job.id}:{stored_job.max_retries}"
+    assert envelope.payload["job_id"] == str(job.id)
+    assert envelope.payload["document_id"] == str(document.id)
+    assert envelope.payload["dlq_topic"] == DLQ_INGESTION
+    assert envelope.payload["attempt"] == stored_job.max_retries
+    assert envelope.payload["terminal_reason"] == "max_retries_exhausted"

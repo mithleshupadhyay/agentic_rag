@@ -2,7 +2,9 @@ import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -21,10 +23,30 @@ from agentic_rag.shared.db.crud.ingestion import (
 )
 from agentic_rag.shared.db.models import Document, IngestionJob
 from agentic_rag.shared.db.session import get_sync_session_factory
+from agentic_rag.shared.kafka.events import (
+    EventEnvelope,
+    EventType,
+    IngestionDLQPayload,
+    IngestionRetryPayload,
+)
+from agentic_rag.shared.kafka.topics import (
+    DLQ_INGESTION,
+    INGESTION_CHUNK,
+    INGESTION_EMBED,
+    INGESTION_INDEX,
+    INGESTION_METADATA,
+    INGESTION_PARSE,
+    RETRY_INGESTION,
+    TOPIC_TO_DLQ_TOPIC,
+    TOPIC_TO_RETRY_TOPIC,
+)
 from agentic_rag.storage.object_store import ObjectStoreClient
 
 
 logger = logging.getLogger(__name__)
+
+
+EventPublisher = Callable[[str, EventEnvelope], None]
 
 
 INGESTION_WORKER_ID = "ingestion-worker"
@@ -155,6 +177,7 @@ def process_ingestion_job(
     db: Session,
     job: IngestionJob,
     object_store: Optional[ObjectStoreClient] = None,
+    event_publisher: EventPublisher | None = None,
 ) -> IngestionJob:
     logger.info(f"[IngestionWorker] Processing ingestion job {job.id}")
     object_store = object_store or ObjectStoreClient()
@@ -231,8 +254,8 @@ def process_ingestion_job(
         )
         return job
 
-    except HTTPException as e:
-        if e.status_code == 409:
+    except Exception as e:
+        if isinstance(e, HTTPException) and e.status_code == 409:
             logger.warning(
                 f"[IngestionWorker] Lost ingestion job lease {job.id}; "
                 "skipping failure update"
@@ -240,31 +263,95 @@ def process_ingestion_job(
             return job
 
         logger.exception(f"[IngestionWorker] Failed ingestion job {job.id}: {e}")
-        mark_ingestion_job_failed(
+        error_message = str(e.detail) if isinstance(e, HTTPException) else str(e)
+        job = mark_ingestion_job_failed(
             db=db,
             job=job,
             error_type=type(e).__name__,
-            error_message=str(e.detail),
+            error_message=error_message,
         )
         if isinstance(document, Document):
             update_document_ingestion_status(db, document, "failed")
-        return job
 
-    except Exception as e:
-        logger.exception(f"[IngestionWorker] Failed ingestion job {job.id}: {e}")
-        mark_ingestion_job_failed(
-            db=db,
-            job=job,
-            error_type=type(e).__name__,
-            error_message=str(e),
-        )
-        if isinstance(document, Document):
-            update_document_ingestion_status(db, document, "failed")
+        if event_publisher:
+            source_topic = INGESTION_PARSE
+            if job.current_stage == "metadata":
+                source_topic = INGESTION_METADATA
+            elif job.current_stage == "chunk":
+                source_topic = INGESTION_CHUNK
+            elif job.current_stage in {"embed", "embedding"}:
+                source_topic = INGESTION_EMBED
+            elif job.current_stage in {"index", "indexing"}:
+                source_topic = INGESTION_INDEX
+
+            failed_at = job.completed_at or datetime.now(timezone.utc)
+            event_type = EventType.INGESTION_DLQ_RECORDED
+            topic = TOPIC_TO_DLQ_TOPIC.get(source_topic, DLQ_INGESTION)
+            idempotency_key = f"ingestion-dlq:{job.id}:{job.retry_count}"
+            payload: IngestionRetryPayload | IngestionDLQPayload
+            if job.next_retry_at is not None:
+                retry_topic = TOPIC_TO_RETRY_TOPIC.get(source_topic, RETRY_INGESTION)
+                retry_delay_seconds = int(
+                    (job.next_retry_at - failed_at).total_seconds()
+                )
+                payload = IngestionRetryPayload(
+                    job_id=job.id,
+                    document_id=job.document_id,
+                    failed_stage=job.current_stage,
+                    source_topic=source_topic,
+                    retry_topic=retry_topic,
+                    attempt=job.retry_count,
+                    max_attempts=job.max_retries,
+                    error_type=job.error_type or type(e).__name__,
+                    error_message=job.error_message,
+                    failed_at=failed_at,
+                    next_retry_at=job.next_retry_at,
+                    metadata={
+                        "worker_id": INGESTION_WORKER_ID,
+                        "retry_delay_seconds": retry_delay_seconds,
+                    },
+                )
+                event_type = EventType.INGESTION_RETRY_SCHEDULED
+                topic = retry_topic
+                idempotency_key = f"ingestion-retry:{job.id}:{job.retry_count}"
+            else:
+                payload = IngestionDLQPayload(
+                    job_id=job.id,
+                    document_id=job.document_id,
+                    failed_stage=job.current_stage,
+                    source_topic=source_topic,
+                    dlq_topic=topic,
+                    attempt=job.retry_count,
+                    max_attempts=job.max_retries,
+                    error_type=job.error_type or type(e).__name__,
+                    error_message=job.error_message,
+                    failed_at=failed_at,
+                    terminal_reason="max_retries_exhausted",
+                    metadata={"worker_id": INGESTION_WORKER_ID},
+                )
+
+            envelope = EventEnvelope(
+                event_type=event_type,
+                tenant_id=job.tenant_id,
+                workspace_id=job.workspace_id,
+                correlation_id=str(job.id),
+                idempotency_key=idempotency_key,
+                payload=payload.model_dump(mode="json"),
+            )
+            try:
+                event_publisher(topic, envelope)
+            except Exception as publish_error:
+                logger.exception(
+                    f"[IngestionWorker] Failed to publish ingestion failure event "
+                    f"job={job.id} topic={topic}: {publish_error}"
+                )
+
         return job
 
 
 def run_ingestion_worker_once(
     object_store: Optional[ObjectStoreClient] = None,
+    event_publisher: EventPublisher | None = None,
 ) -> bool:
     SessionLocal = get_sync_session_factory()
     with SessionLocal() as db:
@@ -280,6 +367,7 @@ def run_ingestion_worker_once(
             db=db,
             job=job,
             object_store=object_store,
+            event_publisher=event_publisher,
         )
         return True
 

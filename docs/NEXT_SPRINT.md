@@ -53,7 +53,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop. | Add worker leases, retry/DLQ behavior, graceful shutdown, queue-backed scheduling, and per-tenant indexing quotas. | High |
 | `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings and writes pgvector rows through embedding CRUD. | Add worker leases, retry/DLQ behavior, Kafka scheduling, per-tenant quotas, and full local smoke tests against PostgreSQL/pgvector. | High |
-| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, renews the lease between processing stages, parses text uploads, writes chunks, and clears locks on completion/failure. | Add graceful shutdown, retry/DLQ publishing, queue-backed scheduling, and per-tenant ingestion quotas. | High |
+| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, renews the lease between processing stages, parses text uploads, writes chunks, clears locks on completion/failure, and emits retry/DLQ event envelopes through a fakeable publisher. | Add graceful shutdown, real Kafka producer wiring, queue-backed scheduling, and per-tenant ingestion quotas. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -94,7 +94,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Publish ingestion retry/DLQ events from the DB-backed worker failure path, still behind the local DB claim flow. |
+| 1 | Add a real Kafka producer adapter for the existing fakeable ingestion failure-event publisher. |
 | 2 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
 | 3 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 4 | Add streaming query responses and query-run cancellation. |

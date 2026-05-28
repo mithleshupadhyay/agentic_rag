@@ -1077,6 +1077,13 @@ on retryable failure publish retry event
 on terminal failure publish DLQ event
 ```
 
+The local ingestion worker currently accepts an optional event publisher
+callable. It writes the database failure state first, then emits an
+`IngestionRetryPayload` to `retry.ingestion` when `next_retry_at` is set, or an
+`IngestionDLQPayload` to `dlq.ingestion` when retries are exhausted. The Kafka
+runtime producer is intentionally separate from this contract so unit tests can
+use a fake publisher.
+
 Required worker settings:
 
 ```text
