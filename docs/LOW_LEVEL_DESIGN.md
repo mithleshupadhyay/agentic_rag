@@ -1021,6 +1021,42 @@ class IndexChunksPayload(BaseModel):
     index_name: str
 ```
 
+### Ingestion Retry Event
+
+```python
+class IngestionRetryPayload(BaseModel):
+    job_id: UUID
+    document_id: UUID | None = None
+    failed_stage: str
+    source_topic: str
+    retry_topic: str
+    attempt: int
+    max_attempts: int
+    error_type: str
+    error_message: str | None = None
+    failed_at: datetime
+    next_retry_at: datetime
+    metadata: dict[str, Any]
+```
+
+### Ingestion DLQ Event
+
+```python
+class IngestionDLQPayload(BaseModel):
+    job_id: UUID
+    document_id: UUID | None = None
+    failed_stage: str
+    source_topic: str
+    dlq_topic: str
+    attempt: int
+    max_attempts: int
+    error_type: str
+    error_message: str | None = None
+    failed_at: datetime
+    terminal_reason: str
+    metadata: dict[str, Any]
+```
+
 ## Worker Design
 
 Each worker follows the same structure:

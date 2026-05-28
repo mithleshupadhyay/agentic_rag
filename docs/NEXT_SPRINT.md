@@ -39,8 +39,8 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, and vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, Redis/Kafka scheduling, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
-| `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants. | Add DLQ topics, retry topics, evaluation topics, tenant-aware topic naming policy, and topic retention documentation. | High |
-| `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas. | Add parser, metadata, chunking, embedding, indexing, retry, DLQ, and audit events with schema versioning and idempotency fields. | High |
+| `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants and canonical topic groupings/mappings for ingestion, retry, and DLQ flows. | Add tenant-aware topic naming policy, topic retention documentation, and environment-specific topic prefixes when queue-backed workers are wired. | High |
+| `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, in-memory circuit breaker protection, and embedding dimension validation. | Add Redis-backed circuit breaker state, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | In-memory LLM circuit breaker state and provider/model failure tracking. | Move state to Redis for multi-replica deployments, add provider health snapshots, and expose safe operational metrics. | High |
@@ -94,7 +94,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add Redis/Kafka-backed worker scheduling, retry/DLQ event publishing, and worker metrics around the DB-backed claim flow. |
+| 1 | Publish ingestion retry/DLQ events from the DB-backed worker failure path, still behind the local DB claim flow. |
 | 2 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
 | 3 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 4 | Add streaming query responses and query-run cancellation. |

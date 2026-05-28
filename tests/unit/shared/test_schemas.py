@@ -8,6 +8,17 @@ from agentic_rag.shared.kafka.events import (
     EmbedChunksPayload,
     EventEnvelope,
     EventType,
+    IngestionDLQPayload,
+    IngestionRetryPayload,
+)
+from agentic_rag.shared.kafka.topics import (
+    ALL_TOPICS,
+    DLQ_INGESTION,
+    INGESTION_CHUNK,
+    INGESTION_PARSE,
+    RETRY_INGESTION,
+    TOPIC_TO_DLQ_TOPIC,
+    TOPIC_TO_RETRY_TOPIC,
 )
 from agentic_rag.shared.schemas.agent import AgentLimits, AgentStateModel
 from agentic_rag.shared.schemas.auth import AclPolicy, AuthContext, Visibility
@@ -233,3 +244,80 @@ def test_kafka_event_envelope_and_payload() -> None:
 
     assert envelope.event_version == 1
     assert envelope.payload["embedding_model"] == "gemini/gemini-embedding-001"
+
+
+def test_kafka_ingestion_retry_event_payload() -> None:
+    next_retry_at = datetime.now(timezone.utc)
+    payload = IngestionRetryPayload(
+        job_id=uuid4(),
+        document_id=uuid4(),
+        failed_stage="parse",
+        source_topic=INGESTION_PARSE,
+        retry_topic=RETRY_INGESTION,
+        attempt=2,
+        max_attempts=3,
+        error_type="ValueError",
+        error_message="Temporary parser failure",
+        next_retry_at=next_retry_at,
+        metadata={"retry_delay_seconds": 60},
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.INGESTION_RETRY_SCHEDULED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="req-1",
+        payload=payload.model_dump(mode="json"),
+    )
+
+    assert envelope.payload["job_id"] == str(payload.job_id)
+    assert envelope.payload["retry_topic"] == RETRY_INGESTION
+    assert envelope.payload["next_retry_at"] == next_retry_at.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+
+
+def test_kafka_ingestion_dlq_event_payload() -> None:
+    payload = IngestionDLQPayload(
+        job_id=uuid4(),
+        document_id=uuid4(),
+        failed_stage="chunk",
+        source_topic=INGESTION_CHUNK,
+        dlq_topic=DLQ_INGESTION,
+        attempt=3,
+        max_attempts=3,
+        error_type="UnicodeDecodeError",
+        error_message="Uploaded document is not valid UTF-8 text",
+        terminal_reason="max_retries_exhausted",
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.INGESTION_DLQ_RECORDED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="req-1",
+        payload=payload.model_dump(mode="json"),
+    )
+
+    assert envelope.payload["dlq_topic"] == DLQ_INGESTION
+    assert envelope.payload["terminal_reason"] == "max_retries_exhausted"
+
+
+def test_kafka_ingestion_retry_payload_validation() -> None:
+    with pytest.raises(ValidationError):
+        IngestionRetryPayload(
+            job_id=uuid4(),
+            failed_stage="parse",
+            source_topic=INGESTION_PARSE,
+            retry_topic=RETRY_INGESTION,
+            attempt=0,
+            max_attempts=3,
+            error_type="ValueError",
+            next_retry_at=datetime.now(timezone.utc),
+        )
+
+
+def test_kafka_topic_sets_and_mappings() -> None:
+    assert RETRY_INGESTION in ALL_TOPICS
+    assert DLQ_INGESTION in ALL_TOPICS
+    assert TOPIC_TO_RETRY_TOPIC[INGESTION_PARSE] == RETRY_INGESTION
+    assert TOPIC_TO_DLQ_TOPIC[INGESTION_CHUNK] == DLQ_INGESTION

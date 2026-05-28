@@ -14,6 +14,8 @@ class EventType(StrEnum):
     DOCUMENT_CHUNK_REQUESTED = "document.chunk_requested"
     DOCUMENT_EMBED_REQUESTED = "document.embed_requested"
     DOCUMENT_INDEX_REQUESTED = "document.index_requested"
+    INGESTION_RETRY_SCHEDULED = "ingestion.retry_scheduled"
+    INGESTION_DLQ_RECORDED = "ingestion.dlq_recorded"
     RAG_LONG_QUERY_REQUESTED = "rag.long_query_requested"
     EVALUATION_BATCH_REQUESTED = "evaluation.batch_requested"
 
@@ -68,3 +70,32 @@ class IndexChunksPayload(APIModel):
     chunk_ids: list[UUID] = Field(..., min_length=1)
     index_name: str = Field(..., min_length=1)
 
+
+class IngestionRetryPayload(APIModel):
+    job_id: UUID
+    document_id: UUID | None = None
+    failed_stage: str = Field(..., min_length=1)
+    source_topic: str = Field(..., min_length=1)
+    retry_topic: str = Field(..., min_length=1)
+    attempt: int = Field(..., ge=1)
+    max_attempts: int = Field(..., ge=1)
+    error_type: str = Field(..., min_length=1, max_length=128)
+    error_message: str | None = None
+    failed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    next_retry_at: datetime
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class IngestionDLQPayload(APIModel):
+    job_id: UUID
+    document_id: UUID | None = None
+    failed_stage: str = Field(..., min_length=1)
+    source_topic: str = Field(..., min_length=1)
+    dlq_topic: str = Field(..., min_length=1)
+    attempt: int = Field(..., ge=1)
+    max_attempts: int = Field(..., ge=1)
+    error_type: str = Field(..., min_length=1, max_length=128)
+    error_message: str | None = None
+    failed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    terminal_reason: str = Field(..., min_length=1)
+    metadata: JsonObject = Field(default_factory=dict)
