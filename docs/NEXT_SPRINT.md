@@ -26,7 +26,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
 | `src/agentic_rag/core/models/user_context.py` | Authenticated user context model. | Add data region, request ID, tenant plan, quota context, and normalized permissions once API traffic and tenant plans are implemented. | Medium |
-| `src/agentic_rag/shared/config.py` | Central environment configuration with auth, database, object storage, OpenSearch, worker leases, ingestion retry backoff, and LLM budget/retry/circuit-breaker settings. | Add Redis, Kafka, reranker, object-store upload limits, observability, quota, and broader worker tuning settings. | High |
+| `src/agentic_rag/shared/config.py` | Central environment configuration with auth, database, Kafka producer bootstrap/flush settings, object storage, OpenSearch, worker leases, ingestion retry backoff, and LLM budget/retry/circuit-breaker settings. | Add Redis, Kafka topic provisioning, reranker, object-store upload limits, observability, quota, and broader worker tuning settings. | High |
 | `src/agentic_rag/shared/db/base.py` | SQLAlchemy base and common model helpers. | Add common audit fields if needed, stronger JSON typing helpers, naming conventions, and migration-safe defaults for production databases. | Medium |
 | `src/agentic_rag/shared/db/session.py` | Database engine/session management. | Add pool tuning, health check helper, transaction utilities, sync/async separation policy, and production retry guidance. | High |
 | `src/agentic_rag/shared/db/models/tenants.py` | Tenant model. | Add tenant status transitions, plan/quota fields, data region enforcement, retention policy, encryption policy, and tenant-level settings. | High |
@@ -41,6 +41,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, cancellation support, and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants and canonical topic groupings/mappings for ingestion, retry, and DLQ flows. | Add tenant-aware topic naming policy, topic retention documentation, and environment-specific topic prefixes when queue-backed workers are wired. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
+| `src/agentic_rag/shared/kafka/producer.py` | Fakeable Kafka event publisher adapter that serializes `EventEnvelope`, applies an idempotency message key, and delegates delivery to an injected send-compatible producer client. | Wire into worker runtime, select the concrete Kafka client, add delivery callbacks, retry policy, metrics, and local Kafka integration tests. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, in-memory circuit breaker protection, and embedding dimension validation. | Add Redis-backed circuit breaker state, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | In-memory LLM circuit breaker state and provider/model failure tracking. | Move state to Redis for multi-replica deployments, add provider health snapshots, and expose safe operational metrics. | High |
@@ -94,7 +95,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add a real Kafka producer adapter for the existing fakeable ingestion failure-event publisher. |
+| 1 | Wire `KafkaEventPublisher` into ingestion worker runtime configuration and choose the concrete local Kafka client. |
 | 2 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
 | 3 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 4 | Add streaming query responses and query-run cancellation. |

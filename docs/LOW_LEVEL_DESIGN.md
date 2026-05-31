@@ -1084,6 +1084,13 @@ callable. It writes the database failure state first, then emits an
 runtime producer is intentionally separate from this contract so unit tests can
 use a fake publisher.
 
+`KafkaEventPublisher` serializes the validated `EventEnvelope` with
+`model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
+provided, falls back to `event_id` otherwise, and delegates delivery to an
+injected send-compatible producer client. This keeps the worker contract
+testable while leaving concrete client selection and worker runtime wiring as a
+separate step.
+
 Required worker settings:
 
 ```text

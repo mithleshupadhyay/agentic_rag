@@ -38,6 +38,15 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias="DATABASE_MAX_OVERFLOW",
     )
+    kafka_bootstrap_servers: str = Field(
+        default="localhost:9092",
+        validation_alias="KAFKA_BOOTSTRAP_SERVERS",
+    )
+    kafka_producer_flush_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.0,
+        validation_alias="KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS",
+    )
     s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
     s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")
     s3_secret_access_key: str = Field(
