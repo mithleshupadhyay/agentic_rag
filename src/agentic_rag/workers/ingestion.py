@@ -29,6 +29,7 @@ from agentic_rag.shared.kafka.events import (
     IngestionDLQPayload,
     IngestionRetryPayload,
 )
+from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
 from agentic_rag.shared.kafka.topics import (
     DLQ_INGESTION,
     INGESTION_CHUNK,
@@ -372,20 +373,33 @@ def run_ingestion_worker_once(
         return True
 
 
-def run_ingestion_worker_loop() -> None:
+def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> None:
     logger.info("[IngestionWorker] Worker loop started")
+    configured_event_publisher = event_publisher
+    if configured_event_publisher is None and settings.kafka_event_publishing_enabled:
+        logger.info("[IngestionWorker] Kafka event publishing enabled")
+        configured_event_publisher = create_kafka_event_publisher(
+            client_id=INGESTION_WORKER_ID,
+        )
 
-    while True:
-        try:
-            processed = run_ingestion_worker_once()
-            if not processed:
+    try:
+        while True:
+            try:
+                processed = run_ingestion_worker_once(
+                    event_publisher=configured_event_publisher,
+                )
+                if not processed:
+                    time.sleep(settings.ingestion_worker_poll_seconds)
+            except KeyboardInterrupt:
+                logger.info("[IngestionWorker] Worker loop stopped")
+                break
+            except Exception as e:
+                logger.exception(f"[IngestionWorker] Worker loop error: {e}")
                 time.sleep(settings.ingestion_worker_poll_seconds)
-        except KeyboardInterrupt:
-            logger.info("[IngestionWorker] Worker loop stopped")
-            break
-        except Exception as e:
-            logger.exception(f"[IngestionWorker] Worker loop error: {e}")
-            time.sleep(settings.ingestion_worker_poll_seconds)
+    finally:
+        close_publisher = getattr(configured_event_publisher, "close", None)
+        if callable(close_publisher):
+            close_publisher()
 
 
 if __name__ == "__main__":

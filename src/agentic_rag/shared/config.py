@@ -38,9 +38,17 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias="DATABASE_MAX_OVERFLOW",
     )
+    kafka_event_publishing_enabled: bool = Field(
+        default=False,
+        validation_alias="KAFKA_EVENT_PUBLISHING_ENABLED",
+    )
     kafka_bootstrap_servers: str = Field(
         default="localhost:9092",
         validation_alias="KAFKA_BOOTSTRAP_SERVERS",
+    )
+    kafka_client_id: str = Field(
+        default="agentic-rag-worker",
+        validation_alias="KAFKA_CLIENT_ID",
     )
     kafka_producer_flush_timeout_seconds: float = Field(
         default=5.0,

@@ -1087,9 +1087,10 @@ use a fake publisher.
 `KafkaEventPublisher` serializes the validated `EventEnvelope` with
 `model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
 provided, falls back to `event_id` otherwise, and delegates delivery to an
-injected send-compatible producer client. This keeps the worker contract
-testable while leaving concrete client selection and worker runtime wiring as a
-separate step.
+injected send-compatible producer client. The ingestion worker creates a
+`kafka-python` producer at startup only when `KAFKA_EVENT_PUBLISHING_ENABLED` is
+true and then passes the publisher into the existing failure-event hook. DB job
+polling remains the local scheduling mechanism until Kafka consumers are added.
 
 Required worker settings:
 

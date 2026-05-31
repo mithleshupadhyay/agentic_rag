@@ -4,8 +4,12 @@ from uuid import uuid4
 
 import pytest
 
+import agentic_rag.shared.kafka.producer as kafka_producer_module
 from agentic_rag.shared.kafka.events import EventEnvelope, EventType
-from agentic_rag.shared.kafka.producer import KafkaEventPublisher
+from agentic_rag.shared.kafka.producer import (
+    KafkaEventPublisher,
+    create_kafka_event_publisher,
+)
 from agentic_rag.shared.kafka.topics import RETRY_INGESTION
 
 
@@ -25,6 +29,10 @@ class FakeProducer:
         return object()
 
     def flush(self, timeout: float | None = None) -> object:
+        self.flush_timeouts.append(timeout)
+        return object()
+
+    def close(self, timeout: float | None = None) -> object:
         self.flush_timeouts.append(timeout)
         return object()
 
@@ -101,3 +109,51 @@ def test_kafka_event_publisher_rejects_empty_topic() -> None:
 
     assert producer.sent_messages == []
     assert producer.flush_timeouts == []
+
+
+def test_kafka_event_publisher_closes_send_compatible_producer() -> None:
+    producer = FakeProducer()
+    publisher = KafkaEventPublisher(
+        producer=producer,
+        flush_timeout_seconds=3.0,
+    )
+
+    publisher.close()
+
+    assert producer.flush_timeouts == [3.0]
+
+
+def test_create_kafka_event_publisher_builds_concrete_producer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_kwargs = {}
+
+    class FakeKafkaProducer(FakeProducer):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__()
+            created_kwargs.update(kwargs)
+
+    class FakeKafkaModule:
+        KafkaProducer = FakeKafkaProducer
+
+    monkeypatch.setattr(
+        kafka_producer_module,
+        "import_module",
+        lambda module_name: FakeKafkaModule if module_name == "kafka" else None,
+    )
+
+    publisher = create_kafka_event_publisher(
+        bootstrap_servers="kafka-a:9092, kafka-b:9092",
+        client_id="ingestion-worker",
+    )
+
+    assert isinstance(publisher, KafkaEventPublisher)
+    assert created_kwargs["bootstrap_servers"] == ["kafka-a:9092", "kafka-b:9092"]
+    assert created_kwargs["client_id"] == "ingestion-worker"
+    assert created_kwargs["acks"] == "all"
+    assert created_kwargs["retries"] == 3
+
+
+def test_create_kafka_event_publisher_requires_bootstrap_servers() -> None:
+    with pytest.raises(ValueError, match="KAFKA_BOOTSTRAP_SERVERS must not be empty"):
+        create_kafka_event_publisher(bootstrap_servers=" ")

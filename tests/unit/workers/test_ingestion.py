@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+import agentic_rag.workers.ingestion as ingestion_worker_module
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import (
@@ -359,3 +360,83 @@ def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
     assert envelope.payload["dlq_topic"] == DLQ_INGESTION
     assert envelope.payload["attempt"] == stored_job.max_retries
     assert envelope.payload["terminal_reason"] == "max_retries_exhausted"
+
+
+def test_ingestion_worker_loop_keeps_kafka_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passed_publishers = []
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_event_publishing_enabled",
+        False,
+    )
+
+    def run_once_spy(
+        object_store=None,
+        event_publisher=None,
+    ) -> bool:
+        passed_publishers.append(event_publisher)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "run_ingestion_worker_once",
+        run_once_spy,
+    )
+
+    ingestion_worker_module.run_ingestion_worker_loop()
+
+    assert passed_publishers == [None]
+
+
+def test_ingestion_worker_loop_uses_configured_kafka_publisher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passed_publishers = []
+    created_client_ids = []
+
+    class RuntimePublisher:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __call__(self, topic: str, envelope: EventEnvelope) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    runtime_publisher = RuntimePublisher()
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_event_publishing_enabled",
+        True,
+    )
+
+    def create_publisher_spy(client_id: str):
+        created_client_ids.append(client_id)
+        return runtime_publisher
+
+    def run_once_spy(
+        object_store=None,
+        event_publisher=None,
+    ) -> bool:
+        passed_publishers.append(event_publisher)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "create_kafka_event_publisher",
+        create_publisher_spy,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "run_ingestion_worker_once",
+        run_once_spy,
+    )
+
+    ingestion_worker_module.run_ingestion_worker_loop()
+
+    assert created_client_ids == ["ingestion-worker"]
+    assert passed_publishers == [runtime_publisher]
+    assert runtime_publisher.closed is True
