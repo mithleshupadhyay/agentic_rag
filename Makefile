@@ -5,7 +5,7 @@ DOCKER_COMPOSE_FILE ?= docker-compose.yml
 DOCKER_PROJECT ?= agentic-rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-kafka-producer
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -26,6 +26,7 @@ help:
 	@printf '%s\n' "  make docker-restart Restart local Docker services"
 	@printf '%s\n' "  make docker-exec SERVICE=api Open a shell in a service"
 	@printf '%s\n' "  make docker-smoke-embedding-worker Check embedding worker container imports and DB connection"
+	@printf '%s\n' "  make docker-smoke-kafka-producer Publish one retry event to local Kafka"
 
 test:
 	poetry run pytest
@@ -86,3 +87,7 @@ endif
 
 docker-smoke-embedding-worker: ensure-env
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec embedding-worker python -c 'from sqlalchemy import text; from agentic_rag.shared.db.session import get_sync_session_factory; from agentic_rag.workers.embedding import process_embedding_batches; SessionLocal = get_sync_session_factory(); session = SessionLocal(); session.execute(text("SELECT 1")); session.close(); print("embedding-worker smoke ok")'
+
+docker-smoke-kafka-producer: ensure-env
+	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec kafka /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T api python -c 'from uuid import uuid4; from agentic_rag.shared.kafka.events import EventEnvelope, EventType; from agentic_rag.shared.kafka.producer import create_kafka_event_publisher; from agentic_rag.shared.kafka.topics import RETRY_INGESTION; job_id = uuid4(); publisher = create_kafka_event_publisher(client_id="kafka-smoke"); envelope = EventEnvelope(event_type=EventType.INGESTION_RETRY_SCHEDULED, tenant_id="local-tenant", workspace_id="local-workspace", correlation_id=str(job_id), idempotency_key=f"kafka-smoke:{job_id}", payload={"job_id": str(job_id), "smoke": True}); publisher(RETRY_INGESTION, envelope); publisher.close(); print("kafka producer smoke ok")'

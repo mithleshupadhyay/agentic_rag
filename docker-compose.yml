@@ -2,6 +2,7 @@ x-api-environment: &api-environment
   DATABASE_URL: ${DOCKER_DATABASE_URL}
   S3_ENDPOINT_URL: ${DOCKER_S3_ENDPOINT_URL}
   OPENSEARCH_URL: ${DOCKER_OPENSEARCH_URL}
+  KAFKA_BOOTSTRAP_SERVERS: ${DOCKER_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
   LITELLM_BASE_URL: ${DOCKER_LITELLM_BASE_URL:-}
 
 x-host-gateway: &host-gateway
@@ -37,6 +38,7 @@ services:
     networks:
       - appnet
       - dbnet
+      - eventnet
       - storagenet
       - searchnet
 
@@ -62,6 +64,7 @@ services:
     restart: unless-stopped
     networks:
       - dbnet
+      - eventnet
       - storagenet
 
   indexing-worker:
@@ -86,6 +89,7 @@ services:
     restart: unless-stopped
     networks:
       - dbnet
+      - eventnet
       - searchnet
 
   embedding-worker:
@@ -110,6 +114,84 @@ services:
     networks:
       - appnet
       - dbnet
+      - eventnet
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: agentic-rag-kafka
+    environment:
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "${KAFKA_PORT:-9092}:9094"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - eventnet
+
+  kafka-init:
+    image: bitnami/kafka:3.7
+    container_name: agentic-rag-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-3}
+      KAFKA_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
+      KAFKA_INGESTION_PARSE_TOPIC: ${KAFKA_INGESTION_PARSE_TOPIC:-ingestion.parse}
+      KAFKA_INGESTION_METADATA_TOPIC: ${KAFKA_INGESTION_METADATA_TOPIC:-ingestion.metadata}
+      KAFKA_INGESTION_CHUNK_TOPIC: ${KAFKA_INGESTION_CHUNK_TOPIC:-ingestion.chunk}
+      KAFKA_INGESTION_EMBED_TOPIC: ${KAFKA_INGESTION_EMBED_TOPIC:-ingestion.embed}
+      KAFKA_INGESTION_INDEX_TOPIC: ${KAFKA_INGESTION_INDEX_TOPIC:-ingestion.index}
+      KAFKA_RAG_LONG_QUERY_TOPIC: ${KAFKA_RAG_LONG_QUERY_TOPIC:-rag.long_query}
+      KAFKA_EVAL_BATCH_TOPIC: ${KAFKA_EVAL_BATCH_TOPIC:-eval.batch}
+      KAFKA_RETRY_INGESTION_TOPIC: ${KAFKA_RETRY_INGESTION_TOPIC:-retry.ingestion}
+      KAFKA_RETRY_EMBEDDING_TOPIC: ${KAFKA_RETRY_EMBEDDING_TOPIC:-retry.embedding}
+      KAFKA_RETRY_INDEXING_TOPIC: ${KAFKA_RETRY_INDEXING_TOPIC:-retry.indexing}
+      KAFKA_DLQ_INGESTION_TOPIC: ${KAFKA_DLQ_INGESTION_TOPIC:-dlq.ingestion}
+      KAFKA_DLQ_EMBEDDING_TOPIC: ${KAFKA_DLQ_EMBEDDING_TOPIC:-dlq.embedding}
+      KAFKA_DLQ_INDEXING_TOPIC: ${KAFKA_DLQ_INDEXING_TOPIC:-dlq.indexing}
+      KAFKA_DLQ_RAG_TOPIC: ${KAFKA_DLQ_RAG_TOPIC:-dlq.rag}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        topics="$${KAFKA_INGESTION_PARSE_TOPIC} $${KAFKA_INGESTION_METADATA_TOPIC} $${KAFKA_INGESTION_CHUNK_TOPIC} $${KAFKA_INGESTION_EMBED_TOPIC} $${KAFKA_INGESTION_INDEX_TOPIC} $${KAFKA_RAG_LONG_QUERY_TOPIC} $${KAFKA_EVAL_BATCH_TOPIC} $${KAFKA_RETRY_INGESTION_TOPIC} $${KAFKA_RETRY_EMBEDDING_TOPIC} $${KAFKA_RETRY_INDEXING_TOPIC} $${KAFKA_DLQ_INGESTION_TOPIC} $${KAFKA_DLQ_EMBEDDING_TOPIC} $${KAFKA_DLQ_INDEXING_TOPIC} $${KAFKA_DLQ_RAG_TOPIC}"
+        for topic in $${topics}; do
+          /opt/bitnami/kafka/bin/kafka-topics.sh \
+            --bootstrap-server "$${KAFKA_BOOTSTRAP_SERVERS}" \
+            --create \
+            --if-not-exists \
+            --topic "$${topic}" \
+            --partitions "$${KAFKA_TOPIC_PARTITIONS}" \
+            --replication-factor "$${KAFKA_TOPIC_REPLICATION_FACTOR}"
+        done
+        echo "[Kafka] Topics ready"
+    restart: "no"
+    networks:
+      - eventnet
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -272,6 +354,7 @@ services:
 networks:
   appnet:
   dbnet:
+  eventnet:
   storagenet:
   searchnet:
 
@@ -281,4 +364,6 @@ volumes:
   minio_data:
     driver: local
   opensearch_data:
+    driver: local
+  kafka_data:
     driver: local

@@ -1091,6 +1091,10 @@ injected send-compatible producer client. The ingestion worker creates a
 `kafka-python` producer at startup only when `KAFKA_EVENT_PUBLISHING_ENABLED` is
 true and then passes the publisher into the existing failure-event hook. DB job
 polling remains the local scheduling mechanism until Kafka consumers are added.
+The local Docker stack includes a single-node Kafka broker and a one-shot topic
+provisioning service for ingestion, retry, DLQ, long-query, and evaluation
+topics. `make docker-smoke-kafka-producer` publishes one retry-style envelope
+through the API container to verify the configured producer path.
 
 Required worker settings:
 
