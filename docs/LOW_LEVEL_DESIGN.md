@@ -1104,13 +1104,15 @@ tenant-scoped DB lease path, and only then calls the existing ingestion job
 processor.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
-DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer`
-publishes one retry-style envelope through the API container to verify the
-configured producer path. `make docker-smoke-kafka-consumer` runs
-`scripts/smoke_kafka_consumer.py` with `KAFKA_CONSUMING_ENABLED=true`, publishes
-one valid `retry.ingestion` envelope, consumes it through the concrete Kafka
-consumer adapter, and verifies the existing ingestion retry handler completes a
-tenant-scoped ingestion job.
+DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer` runs
+`scripts/smoke_kafka_producer.py` through the API container and publishes one
+valid `retry.ingestion` envelope to verify the configured producer path.
+`make docker-smoke-kafka-consumer` delegates host-side Docker orchestration to
+`scripts/docker-smoke-kafka-consumer.sh`, temporarily stops the polling ingestion
+worker, and then runs `scripts/smoke_kafka_consumer.py` in the API container with
+`KAFKA_CONSUMING_ENABLED=true`. The smoke publishes one valid `retry.ingestion`
+envelope, consumes it through the concrete Kafka consumer adapter, and verifies
+the existing ingestion retry handler completes a tenant-scoped ingestion job.
 
 Required worker settings:
 
