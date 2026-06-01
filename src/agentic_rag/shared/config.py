@@ -38,22 +38,22 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias="DATABASE_MAX_OVERFLOW",
     )
-    kafka_event_publishing_enabled: bool = Field(
+    event_stream_publishing_enabled: bool = Field(
         default=False,
-        validation_alias="KAFKA_EVENT_PUBLISHING_ENABLED",
+        validation_alias="EVENT_STREAM_PUBLISHING_ENABLED",
     )
-    kafka_bootstrap_servers: str = Field(
+    event_stream_bootstrap_servers: str = Field(
         default="localhost:9092",
-        validation_alias="KAFKA_BOOTSTRAP_SERVERS",
+        validation_alias="EVENT_STREAM_BOOTSTRAP_SERVERS",
     )
-    kafka_client_id: str = Field(
+    event_stream_client_id: str = Field(
         default="agentic-rag-worker",
-        validation_alias="KAFKA_CLIENT_ID",
+        validation_alias="EVENT_STREAM_CLIENT_ID",
     )
-    kafka_producer_flush_timeout_seconds: float = Field(
+    event_stream_producer_flush_timeout_seconds: float = Field(
         default=5.0,
         ge=0.0,
-        validation_alias="KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS",
+        validation_alias="EVENT_STREAM_PRODUCER_FLUSH_TIMEOUT_SECONDS",
     )
     s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
     s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")

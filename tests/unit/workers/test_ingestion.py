@@ -368,7 +368,7 @@ def test_ingestion_worker_loop_keeps_kafka_disabled_by_default(
     passed_publishers = []
     monkeypatch.setattr(
         ingestion_worker_module.settings,
-        "kafka_event_publishing_enabled",
+        "event_stream_publishing_enabled",
         False,
     )
 
@@ -409,7 +409,7 @@ def test_ingestion_worker_loop_uses_configured_kafka_publisher(
     runtime_publisher = RuntimePublisher()
     monkeypatch.setattr(
         ingestion_worker_module.settings,
-        "kafka_event_publishing_enabled",
+        "event_stream_publishing_enabled",
         True,
     )
 

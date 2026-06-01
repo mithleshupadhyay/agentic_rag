@@ -155,5 +155,8 @@ def test_create_kafka_event_publisher_builds_concrete_producer(
 
 
 def test_create_kafka_event_publisher_requires_bootstrap_servers() -> None:
-    with pytest.raises(ValueError, match="KAFKA_BOOTSTRAP_SERVERS must not be empty"):
+    with pytest.raises(
+        ValueError,
+        match="EVENT_STREAM_BOOTSTRAP_SERVERS must not be empty",
+    ):
         create_kafka_event_publisher(bootstrap_servers=" ")

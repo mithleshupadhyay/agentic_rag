@@ -27,6 +27,20 @@ def test_database_url_uses_sync_driver_for_alembic() -> None:
     )
 
 
+def test_event_stream_settings_use_generic_environment_names() -> None:
+    settings = Settings(
+        EVENT_STREAM_PUBLISHING_ENABLED=True,
+        EVENT_STREAM_BOOTSTRAP_SERVERS="event-a:9092,event-b:9092",
+        EVENT_STREAM_CLIENT_ID="worker-a",
+        EVENT_STREAM_PRODUCER_FLUSH_TIMEOUT_SECONDS=2.5,
+    )
+
+    assert settings.event_stream_publishing_enabled is True
+    assert settings.event_stream_bootstrap_servers == "event-a:9092,event-b:9092"
+    assert settings.event_stream_client_id == "worker-a"
+    assert settings.event_stream_producer_flush_timeout_seconds == 2.5
+
+
 def test_metadata_contains_core_tables() -> None:
     expected_tables = {
         "tenants",
