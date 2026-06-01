@@ -1106,7 +1106,11 @@ The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
 DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer`
 publishes one retry-style envelope through the API container to verify the
-configured producer path.
+configured producer path. `make docker-smoke-kafka-consumer` runs
+`scripts/smoke_kafka_consumer.py` with `KAFKA_CONSUMING_ENABLED=true`, publishes
+one valid `retry.ingestion` envelope, consumes it through the concrete Kafka
+consumer adapter, and verifies the existing ingestion retry handler completes a
+tenant-scoped ingestion job.
 
 Required worker settings:
 

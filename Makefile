@@ -5,7 +5,7 @@ DOCKER_COMPOSE_FILE ?= docker-compose.yml
 DOCKER_PROJECT ?= agentic-rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-kafka-producer
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-kafka-producer docker-smoke-kafka-consumer
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -27,6 +27,7 @@ help:
 	@printf '%s\n' "  make docker-exec SERVICE=api Open a shell in a service"
 	@printf '%s\n' "  make docker-smoke-embedding-worker Check embedding worker container imports and DB connection"
 	@printf '%s\n' "  make docker-smoke-kafka-producer Publish one retry event to local Kafka"
+	@printf '%s\n' "  make docker-smoke-kafka-consumer Consume one retry event and complete an ingestion job"
 
 test:
 	poetry run pytest
@@ -91,3 +92,11 @@ docker-smoke-embedding-worker: ensure-env
 docker-smoke-kafka-producer: ensure-env
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T api python -c 'from uuid import uuid4; from agentic_rag.shared.kafka.events import EventEnvelope, EventType; from agentic_rag.shared.kafka.producer import create_kafka_event_publisher; from agentic_rag.shared.kafka.topics import RETRY_INGESTION; job_id = uuid4(); publisher = create_kafka_event_publisher(client_id="kafka-smoke"); envelope = EventEnvelope(event_type=EventType.INGESTION_RETRY_SCHEDULED, tenant_id="local-tenant", workspace_id="local-workspace", correlation_id=str(job_id), idempotency_key=f"kafka-smoke:{job_id}", payload={"job_id": str(job_id), "smoke": True}); publisher(RETRY_INGESTION, envelope); publisher.close(); print("kafka producer smoke ok")'
+
+docker-smoke-kafka-consumer: ensure-env
+	@compose=(docker compose --env-file "$(ENV_FILE)" -f "$(DOCKER_COMPOSE_FILE)" -p "$(DOCKER_PROJECT)"); \
+	"$${compose[@]}" exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null; \
+	was_running="$$( "$${compose[@]}" ps --services --filter status=running | grep -Fx "ingestion-worker" || true )"; \
+	if [[ -n "$$was_running" ]]; then "$${compose[@]}" stop ingestion-worker >/dev/null; fi; \
+	trap 'if [[ -n "$$was_running" ]]; then "$${compose[@]}" start ingestion-worker >/dev/null; fi' EXIT; \
+	"$${compose[@]}" exec -T api env KAFKA_CONSUMING_ENABLED=true python scripts/smoke_kafka_consumer.py
