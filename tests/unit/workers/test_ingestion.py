@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -26,6 +28,7 @@ from agentic_rag.shared.schemas.documents import (
 )
 from agentic_rag.workers.ingestion import (
     decode_text_document,
+    handle_ingestion_retry_event,
     process_ingestion_job,
     run_ingestion_worker_once,
     split_text_into_chunks,
@@ -362,6 +365,152 @@ def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
     assert envelope.payload["terminal_reason"] == "max_retries_exhausted"
 
 
+def test_handle_ingestion_retry_event_claims_and_processes_retry_job(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, job = create_job(db)
+    job.status = "failed"
+    job.retry_count = 1
+    job.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    processed_jobs = []
+    event_publisher = FakeEventPublisher()
+
+    class ExistingSessionContext:
+        def __enter__(self):
+            return db
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def get_session_factory():
+        return ExistingSessionContext
+
+    def process_spy(
+        db: Session,
+        job: IngestionJob,
+        object_store=None,
+        event_publisher=None,
+    ) -> IngestionJob:
+        processed_jobs.append((job.id, event_publisher))
+        return job
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "get_sync_session_factory",
+        get_session_factory,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "process_ingestion_job",
+        process_spy,
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.INGESTION_RETRY_SCHEDULED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id=str(job.id),
+        payload={
+            "job_id": str(job.id),
+            "document_id": str(job.document_id),
+            "failed_stage": "parse",
+            "source_topic": "ingestion.parse",
+            "retry_topic": RETRY_INGESTION,
+            "attempt": 1,
+            "max_attempts": job.max_retries,
+            "error_type": "ValueError",
+            "error_message": "Temporary parser failure",
+            "failed_at": datetime.now(timezone.utc),
+            "next_retry_at": datetime.now(timezone.utc) - timedelta(seconds=1),
+            "metadata": {},
+        },
+    )
+
+    processed = handle_ingestion_retry_event(
+        envelope=envelope,
+        event_publisher=event_publisher,
+    )
+    stored_job = db.get(IngestionJob, job.id)
+
+    assert processed is True
+    assert processed_jobs == [(job.id, event_publisher)]
+    assert stored_job.status == "running"
+    assert stored_job.locked_by == "ingestion-worker"
+    assert stored_job.next_retry_at is None
+
+
+def test_handle_ingestion_retry_event_skips_missing_job(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExistingSessionContext:
+        def __enter__(self):
+            return db
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def get_session_factory():
+        return ExistingSessionContext
+
+    def process_spy(
+        db: Session,
+        job: IngestionJob,
+        object_store=None,
+        event_publisher=None,
+    ) -> IngestionJob:
+        raise AssertionError("missing retry job should not be processed")
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "get_sync_session_factory",
+        get_session_factory,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "process_ingestion_job",
+        process_spy,
+    )
+    job_id = uuid4()
+    envelope = EventEnvelope(
+        event_type=EventType.INGESTION_RETRY_SCHEDULED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id=str(job_id),
+        payload={
+            "job_id": str(job_id),
+            "failed_stage": "parse",
+            "source_topic": "ingestion.parse",
+            "retry_topic": RETRY_INGESTION,
+            "attempt": 1,
+            "max_attempts": 3,
+            "error_type": "ValueError",
+            "failed_at": datetime.now(timezone.utc),
+            "next_retry_at": datetime.now(timezone.utc) - timedelta(seconds=1),
+            "metadata": {},
+        },
+    )
+
+    processed = handle_ingestion_retry_event(envelope)
+
+    assert processed is False
+
+
+def test_handle_ingestion_retry_event_skips_invalid_payload() -> None:
+    envelope = EventEnvelope(
+        event_type=EventType.INGESTION_RETRY_SCHEDULED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="request-1",
+        payload={"job_id": str(uuid4())},
+    )
+
+    processed = handle_ingestion_retry_event(envelope)
+
+    assert processed is False
+
+
 def test_ingestion_worker_loop_keeps_kafka_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -369,6 +518,11 @@ def test_ingestion_worker_loop_keeps_kafka_disabled_by_default(
     monkeypatch.setattr(
         ingestion_worker_module.settings,
         "kafka_publishing_enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_consuming_enabled",
         False,
     )
 
@@ -383,6 +537,11 @@ def test_ingestion_worker_loop_keeps_kafka_disabled_by_default(
         ingestion_worker_module,
         "run_ingestion_worker_once",
         run_once_spy,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "create_kafka_event_consumer",
+        lambda **kwargs: pytest.fail("Kafka consumer should be disabled"),
     )
 
     ingestion_worker_module.run_ingestion_worker_loop()
@@ -412,6 +571,11 @@ def test_ingestion_worker_loop_uses_configured_kafka_publisher(
         "kafka_publishing_enabled",
         True,
     )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_consuming_enabled",
+        False,
+    )
 
     def create_publisher_spy(client_id: str):
         created_client_ids.append(client_id)
@@ -440,3 +604,62 @@ def test_ingestion_worker_loop_uses_configured_kafka_publisher(
     assert created_client_ids == ["ingestion-worker"]
     assert passed_publishers == [runtime_publisher]
     assert runtime_publisher.closed is True
+
+
+def test_ingestion_worker_loop_uses_configured_retry_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_consumers = []
+
+    class RuntimeConsumer:
+        def __init__(self) -> None:
+            self.closed = False
+            self.ran = False
+
+        def run_forever(self) -> None:
+            self.ran = True
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    runtime_consumer = RuntimeConsumer()
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_publishing_enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_consuming_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "kafka_ingestion_retry_consumer_group",
+        "agentic-rag-ingestion-retry-test",
+    )
+
+    def create_consumer_spy(**kwargs):
+        created_consumers.append(kwargs)
+        return runtime_consumer
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "create_kafka_event_consumer",
+        create_consumer_spy,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "run_ingestion_worker_once",
+        lambda **kwargs: pytest.fail("DB polling should not run in consume mode"),
+    )
+
+    ingestion_worker_module.run_ingestion_worker_loop()
+
+    assert created_consumers[0]["topics"] == [RETRY_INGESTION]
+    assert created_consumers[0]["group_id"] == "agentic-rag-ingestion-retry-test"
+    assert created_consumers[0]["client_id"] == "ingestion-worker-retry"
+    assert callable(created_consumers[0]["handler"])
+    assert runtime_consumer.ran is True
+    assert runtime_consumer.closed is True

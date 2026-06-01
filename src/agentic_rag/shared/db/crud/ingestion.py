@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import and_, or_
@@ -81,6 +82,93 @@ def claim_next_ingestion_job(
     except IntegrityError as e:
         db.rollback()
         logger.exception(f"[DB] Failed to claim ingestion job {job.id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during ingestion job claim.",
+        )
+
+
+def claim_ingestion_job_by_id(
+    db: Session,
+    job_id: UUID,
+    tenant_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> Optional[IngestionJob]:
+    logger.info(
+        f"[DB] Claiming ingestion job by id job={job_id} "
+        f"tenant={tenant_id} worker={worker_id}"
+    )
+    now = datetime.now(timezone.utc)
+    query = (
+        db.query(IngestionJob)
+        .options(
+            selectinload(IngestionJob.document).selectinload(Document.acl),
+        )
+        .filter(
+            IngestionJob.id == job_id,
+            IngestionJob.tenant_id == tenant_id,
+        )
+    )
+
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind else ""
+    if dialect_name == "postgresql":
+        query = query.with_for_update(skip_locked=True)
+
+    job = query.first()
+    if not job:
+        logger.warning(
+            f"[DB] No claimable ingestion job found by id job={job_id} "
+            f"tenant={tenant_id}"
+        )
+        return None
+
+    next_retry_at = job.next_retry_at
+    if next_retry_at is not None and next_retry_at.tzinfo is None:
+        next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
+    if job.status != "failed":
+        logger.warning(
+            f"[DB] Ingestion job {job.id} is not retryable status={job.status}"
+        )
+        return None
+    if job.retry_count >= job.max_retries:
+        logger.warning(
+            f"[DB] Ingestion job {job.id} exhausted retries "
+            f"retry_count={job.retry_count} max_retries={job.max_retries}"
+        )
+        return None
+    if next_retry_at is not None and next_retry_at > now:
+        logger.info(
+            f"[DB] Ingestion job {job.id} is not ready for retry "
+            f"next_retry_at={job.next_retry_at}"
+        )
+        return None
+
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    job.status = "running"
+    job.current_stage = "parse"
+    job.error_type = None
+    job.error_message = None
+    job.locked_by = worker_id
+    job.locked_at = now
+    job.lease_expires_at = lease_expires_at
+    job.next_retry_at = None
+    job.started_at = now
+
+    try:
+        db.commit()
+        db.refresh(job)
+        _ = job.document
+        logger.info(
+            f"[DB] Claimed ingestion job {job.id} by id "
+            f"lease_expires_at={lease_expires_at}"
+        )
+        return job
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to claim ingestion job {job.id} by id: {e}")
         raise HTTPException(
             status_code=400,
             detail="Database error during ingestion job claim.",

@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.ingestion import (
+    claim_ingestion_job_by_id,
     claim_next_ingestion_job,
     mark_ingestion_job_completed,
     mark_ingestion_job_failed,
@@ -29,6 +31,7 @@ from agentic_rag.shared.kafka.events import (
     IngestionDLQPayload,
     IngestionRetryPayload,
 )
+from agentic_rag.shared.kafka.consumer import create_kafka_event_consumer
 from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
 from agentic_rag.shared.kafka.topics import (
     DLQ_INGESTION,
@@ -51,6 +54,7 @@ EventPublisher = Callable[[str, EventEnvelope], None]
 
 
 INGESTION_WORKER_ID = "ingestion-worker"
+INGESTION_RETRY_CONSUMER_ID = "ingestion-worker-retry"
 
 
 TEXT_FILE_EXTENSIONS = {
@@ -373,6 +377,59 @@ def run_ingestion_worker_once(
         return True
 
 
+def handle_ingestion_retry_event(
+    envelope: EventEnvelope,
+    object_store: Optional[ObjectStoreClient] = None,
+    event_publisher: EventPublisher | None = None,
+) -> bool:
+    if envelope.event_type != EventType.INGESTION_RETRY_SCHEDULED:
+        logger.warning(
+            f"[IngestionWorker] Skipping non-retry event "
+            f"event_type={envelope.event_type} event_id={envelope.event_id}"
+        )
+        return False
+
+    try:
+        payload = IngestionRetryPayload.model_validate(envelope.payload)
+    except ValidationError as e:
+        logger.warning(
+            f"[IngestionWorker] Skipping invalid retry payload "
+            f"event_id={envelope.event_id}: {e}"
+        )
+        return False
+
+    if payload.retry_topic != RETRY_INGESTION:
+        logger.warning(
+            f"[IngestionWorker] Skipping retry event for unexpected topic "
+            f"event_id={envelope.event_id} retry_topic={payload.retry_topic}"
+        )
+        return False
+
+    SessionLocal = get_sync_session_factory()
+    with SessionLocal() as db:
+        job = claim_ingestion_job_by_id(
+            db=db,
+            job_id=payload.job_id,
+            tenant_id=envelope.tenant_id,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
+        if not job:
+            logger.info(
+                f"[IngestionWorker] Retry event did not claim job "
+                f"job={payload.job_id} tenant={envelope.tenant_id}"
+            )
+            return False
+
+        process_ingestion_job(
+            db=db,
+            job=job,
+            object_store=object_store,
+            event_publisher=event_publisher,
+        )
+        return True
+
+
 def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> None:
     logger.info("[IngestionWorker] Worker loop started")
     configured_event_publisher = event_publisher
@@ -382,7 +439,29 @@ def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> 
             client_id=INGESTION_WORKER_ID,
         )
 
+    retry_consumer = None
     try:
+        if settings.kafka_consuming_enabled:
+            logger.info("[IngestionWorker] Kafka retry consumer enabled")
+
+            def handle_retry(envelope: EventEnvelope) -> None:
+                handle_ingestion_retry_event(
+                    envelope=envelope,
+                    event_publisher=configured_event_publisher,
+                )
+
+            retry_consumer = create_kafka_event_consumer(
+                topics=[RETRY_INGESTION],
+                group_id=settings.kafka_ingestion_retry_consumer_group,
+                handler=handle_retry,
+                client_id=INGESTION_RETRY_CONSUMER_ID,
+            )
+            try:
+                retry_consumer.run_forever()
+            except KeyboardInterrupt:
+                logger.info("[IngestionWorker] Kafka retry consumer stopped")
+            return
+
         while True:
             try:
                 processed = run_ingestion_worker_once(
@@ -400,6 +479,8 @@ def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> 
         close_publisher = getattr(configured_event_publisher, "close", None)
         if callable(close_publisher):
             close_publisher()
+        if retry_consumer is not None:
+            retry_consumer.close()
 
 
 if __name__ == "__main__":

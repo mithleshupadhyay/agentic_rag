@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="KAFKA_PUBLISHING_ENABLED",
     )
+    kafka_consuming_enabled: bool = Field(
+        default=False,
+        validation_alias="KAFKA_CONSUMING_ENABLED",
+    )
     kafka_bootstrap_servers: str = Field(
         default="localhost:9092",
         validation_alias="KAFKA_BOOTSTRAP_SERVERS",
@@ -54,6 +58,10 @@ class Settings(BaseSettings):
         default=5.0,
         ge=0.0,
         validation_alias="KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS",
+    )
+    kafka_ingestion_retry_consumer_group: str = Field(
+        default="agentic-rag-ingestion-retry",
+        validation_alias="KAFKA_INGESTION_RETRY_CONSUMER_GROUP",
     )
     s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
     s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")

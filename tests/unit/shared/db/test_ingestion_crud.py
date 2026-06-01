@@ -15,6 +15,7 @@ from agentic_rag.shared.db.crud.documents import (
     create_ingestion_job_for_document,
 )
 from agentic_rag.shared.db.crud.ingestion import (
+    claim_ingestion_job_by_id,
     claim_next_ingestion_job,
     get_next_queued_ingestion_job,
     mark_ingestion_job_completed,
@@ -246,6 +247,58 @@ def test_claim_next_ingestion_job_retries_failed_job_before_max_retries(
     assert claimed_job.status == "running"
     assert claimed_job.error_type is None
     assert claimed_job.next_retry_at is None
+
+
+def test_claim_ingestion_job_by_id_claims_retryable_failed_job(db: Session) -> None:
+    _, _, job = create_uploaded_document(db)
+    failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=job,
+        error_type="ValueError",
+        error_message="Temporary parser failure",
+    )
+    failed_job.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    claimed_job = claim_ingestion_job_by_id(
+        db=db,
+        job_id=job.id,
+        tenant_id="tenant-a",
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    assert claimed_job.id == job.id
+    assert claimed_job.status == "running"
+    assert claimed_job.current_stage == "parse"
+    assert claimed_job.locked_by == "worker-1"
+    assert claimed_job.error_type is None
+    assert claimed_job.next_retry_at is None
+
+
+def test_claim_ingestion_job_by_id_enforces_tenant_scope(db: Session) -> None:
+    _, _, job = create_uploaded_document(db)
+    failed_job = mark_ingestion_job_failed(
+        db=db,
+        job=job,
+        error_type="ValueError",
+        error_message="Temporary parser failure",
+    )
+    failed_job.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    claimed_job = claim_ingestion_job_by_id(
+        db=db,
+        job_id=job.id,
+        tenant_id="other-tenant",
+        worker_id="worker-1",
+        lease_seconds=300,
+    )
+
+    db.refresh(job)
+    assert claimed_job is None
+    assert job.status == "failed"
+    assert job.locked_by is None
 
 
 def test_claim_next_ingestion_job_skips_failed_job_before_retry_time(

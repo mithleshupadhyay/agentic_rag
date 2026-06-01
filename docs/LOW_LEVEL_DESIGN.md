@@ -1090,13 +1090,18 @@ provided, falls back to `event_id` otherwise, and delegates delivery to an
 injected send-compatible producer client. The ingestion worker creates a
 `kafka-python` producer at startup only when `KAFKA_PUBLISHING_ENABLED` is
 true and then passes the publisher into the existing failure-event hook. DB job
-polling remains the local scheduling mechanism until Kafka consumers are added.
+polling remains the default local scheduling mechanism.
 `KafkaEventConsumer` mirrors the producer shape for the consume side: it accepts
 an injected consumer client and handler callable, validates raw message values
 into `EventEnvelope`, commits offsets after handler success, and commits invalid
 JSON/schema messages only after logging the validation rejection so a poison
 message does not block the partition. The concrete factory creates a
-`kafka-python` consumer with automatic commits disabled.
+`kafka-python` consumer with automatic commits disabled. When
+`KAFKA_CONSUMING_ENABLED` is true, the ingestion worker can subscribe to
+`retry.ingestion` with `KAFKA_INGESTION_RETRY_CONSUMER_GROUP`; the retry handler
+validates `IngestionRetryPayload`, claims the referenced job through the existing
+tenant-scoped DB lease path, and only then calls the existing ingestion job
+processor.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
 DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer`
