@@ -1088,7 +1088,7 @@ use a fake publisher.
 `model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
 provided, falls back to `event_id` otherwise, and delegates delivery to an
 injected send-compatible producer client. The ingestion worker creates a
-`kafka-python` producer at startup only when `EVENT_STREAM_PUBLISHING_ENABLED` is
+`kafka-python` producer at startup only when `KAFKA_PUBLISHING_ENABLED` is
 true and then passes the publisher into the existing failure-event hook. DB job
 polling remains the local scheduling mechanism until Kafka consumers are added.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic

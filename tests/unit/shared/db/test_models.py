@@ -27,18 +27,18 @@ def test_database_url_uses_sync_driver_for_alembic() -> None:
     )
 
 
-def test_event_stream_settings_use_generic_environment_names() -> None:
+def test_kafka_settings_use_kafka_environment_names() -> None:
     settings = Settings(
-        EVENT_STREAM_PUBLISHING_ENABLED=True,
-        EVENT_STREAM_BOOTSTRAP_SERVERS="event-a:9092,event-b:9092",
-        EVENT_STREAM_CLIENT_ID="worker-a",
-        EVENT_STREAM_PRODUCER_FLUSH_TIMEOUT_SECONDS=2.5,
+        KAFKA_PUBLISHING_ENABLED=True,
+        KAFKA_BOOTSTRAP_SERVERS="kafka-a:9092,kafka-b:9092",
+        KAFKA_CLIENT_ID="worker-a",
+        KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS=2.5,
     )
 
-    assert settings.event_stream_publishing_enabled is True
-    assert settings.event_stream_bootstrap_servers == "event-a:9092,event-b:9092"
-    assert settings.event_stream_client_id == "worker-a"
-    assert settings.event_stream_producer_flush_timeout_seconds == 2.5
+    assert settings.kafka_publishing_enabled is True
+    assert settings.kafka_bootstrap_servers == "kafka-a:9092,kafka-b:9092"
+    assert settings.kafka_client_id == "worker-a"
+    assert settings.kafka_producer_flush_timeout_seconds == 2.5
 
 
 def test_metadata_contains_core_tables() -> None:
