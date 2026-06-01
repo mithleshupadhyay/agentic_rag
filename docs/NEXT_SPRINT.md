@@ -42,6 +42,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants and canonical topic groupings/mappings for ingestion, retry, and DLQ flows. | Add tenant-aware topic naming policy, topic retention documentation, and environment-specific topic prefixes when queue-backed workers are wired. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
 | `src/agentic_rag/shared/kafka/producer.py` | Fakeable Kafka event publisher adapter that serializes `EventEnvelope`, applies an idempotency message key, and can create a concrete `kafka-python` producer for runtime publishing against the local Kafka stack. | Add delivery callbacks, retry policy, producer metrics, and broader local Kafka integration tests. | High |
+| `src/agentic_rag/shared/kafka/consumer.py` | Fakeable Kafka event consumer adapter that validates `EventEnvelope` messages, commits valid messages after handler success, and skips invalid poison messages after logging validation failures. | Wire one ingestion retry topic into the worker loop, then add delivery metrics and local Kafka consume smoke coverage. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, in-memory circuit breaker protection, and embedding dimension validation. | Add Redis-backed circuit breaker state, model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | In-memory LLM circuit breaker state and provider/model failure tracking. | Move state to Redis for multi-replica deployments, add provider health snapshots, and expose safe operational metrics. | High |
@@ -95,7 +96,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add Kafka consumer scaffolding for ingestion retry/DLQ topics while keeping DB-backed job claiming as the source of truth. |
+| 1 | Wire the `retry.ingestion` topic into the ingestion worker while keeping DB-backed job claiming as the source of truth. |
 | 2 | Add Redis-backed LLM circuit breaker state for multi-replica deployments. |
 | 3 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
 | 4 | Add streaming query responses and query-run cancellation. |
