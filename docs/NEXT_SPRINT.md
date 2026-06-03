@@ -50,6 +50,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, and memory fallback if Redis is unavailable. | Add provider health snapshots and expose safe operational metrics. | High |
+| `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, and safe fallback state. | Wire the guardrail skeleton into LangGraph orchestration, persisted agent runs/steps/checkpoints, retrieval tools, LLM gateway calls, cancellation, and streaming events when the query flow is ready for the next agent slice. | High |
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
@@ -68,7 +69,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/schemas/ingestion.py` | Ingestion schemas. | Add upload ingestion request, connector ingestion request, job progress response, retry response, and batch ingestion status response. | High |
 | `src/agentic_rag/shared/schemas/retrieval.py` | Retrieval schemas. | Add metadata search, BM25 search, vector search, hybrid merge, reranker, citation, and ACL-filtered candidate schemas. | High |
 | `src/agentic_rag/shared/schemas/query.py` | Query API schemas. | Add streaming response events, grounded answer response, citation response, cache metadata, and budget/timeout fields. | High |
-| `src/agentic_rag/shared/schemas/agent.py` | Agent runtime schemas. | Add LangGraph state, step records, tool call records, checkpoint metadata, max step/tool limits, and loop detection fields. | High |
+| `src/agentic_rag/shared/schemas/agent.py` | Agent runtime schemas for limits, state, step records, tool call records, checkpoint metadata, statuses, and loop detection fields. | Add persisted run lifecycle request/response schemas, transition validation fields, cancellation metadata, and streaming event schemas when the runtime is wired into APIs. | High |
 | `src/agentic_rag/shared/schemas/llm.py` | LLM gateway schemas for chat completion, model metadata, embeddings, and budget decisions. | Add model routing, token budget, retry policy, prompt policy, and response safety metadata. | High |
 | `src/agentic_rag/shared/schemas/evaluation.py` | Evaluation schemas. | Add retrieval evaluation, answer faithfulness, citation accuracy, latency, cost, and regression test result schemas. | Medium |
 | `tests/unit/api/test_documents.py` | Document API tests, including upload behavior. | Add more authorization edge cases, idempotent upload tests, ingestion status tests, and large file validation tests. | High |
@@ -85,6 +86,7 @@ retrieval quality, and production operations.
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
 | `tests/unit/search/test_opensearch.py` | OpenSearch client tests. | Add partial bulk failure handling, search error handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
 | `tests/unit/llm/test_gateway.py` | LLM gateway unit tests, including LiteLLM call mapping, request budget rejection, retry behavior, and circuit breaker behavior. | Add provider-specific mocked cases, timeout tests, Redis-backed circuit tests, and no-secret logging tests. | High |
+| `tests/unit/agent/test_runtime.py` | Agent runtime guardrail tests for state initialization, step and tool limits, timeout behavior, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add LangGraph node orchestration, persisted checkpoint, cancellation, and streaming event tests when those runtime layers are implemented. | High |
 | `tests/unit/query/test_answer_verifier.py` | Deterministic answer verifier tests for valid citations, missing citations, unknown citations, and no-context behavior. | Add quote-level grounding and confidence scoring tests when verifier logic becomes richer. | High |
 | `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs, metric accounting, and answer-verification fallback. | Add cache/fallback, synthesis handoff edge cases, and no-result response behavior tests. | High |
 | `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests. | Add score threshold, metadata/date filters, no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
@@ -96,12 +98,18 @@ retrieval quality, and production operations.
 | `tests/unit/workers/test_indexing.py` | BM25 indexing worker tests. | Add retry/DLQ, worker loop shutdown, batch sizing, and per-tenant selection tests. | Medium |
 | `tests/unit/workers/test_embedding.py` | Embedding worker tests for missing chunk selection, stale hash re-embedding, tenant batching, and provider failure safety. | Add worker loop shutdown tests, Docker smoke tests, retry/DLQ behavior, and PostgreSQL/pgvector integration coverage. | High |
 
+## Recently Completed
+
+| Date | Work |
+|---|---|
+| 2026-06-03 | Added the local agent runtime skeleton with max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. |
+
 ## Recommended Next Implementation Order
 
 | Step | Work |
 |---|---|
-| 1 | Add agent runtime skeleton with max steps, max_tool_calls, timeout, checkpointing, and loop protection. |
-| 2 | Add streaming query responses and query-run cancellation. |
-| 3 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |
-| 4 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
-| 5 | Add provider health snapshots and safe circuit-breaker metrics. |
+| 1 | Add streaming query responses and query-run cancellation. |
+| 2 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |
+| 3 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
+| 4 | Add provider health snapshots and safe circuit-breaker metrics. |
+| 5 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |

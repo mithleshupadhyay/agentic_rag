@@ -868,6 +868,19 @@ POST /internal/v1/agent/runs/{agent_run_id}/cancel
 The Agent Runtime owns LangGraph execution and calls Retrieval Service and LLM
 Gateway through contracts.
 
+Current local implementation:
+
+```text
+src/agentic_rag/agent/runtime.py
+```
+
+The local runtime skeleton creates `AgentStateModel` instances from
+`AuthContext` and `AgentLimits`, records node progress, increments step and tool
+call counts, evaluates guardrails, applies the standard safe fallback answer,
+and returns an `AgentCheckpoint` payload after each recorded node. This first
+slice intentionally does not wire LangGraph, internal API endpoints, database
+persistence, retrieval execution, or LLM calls yet.
+
 ### LLM Gateway
 
 Internal endpoints:
@@ -1193,6 +1206,7 @@ human_handoff
 - Stop when `step_count > max_steps`.
 - Stop when `tool_call_count > max_tool_calls`.
 - Stop if deadline is exceeded.
+- Stop if a recorded step exceeds `step_timeout_seconds`.
 - Stop if the same tool with the same arguments repeats more than twice.
 - Do not call generation when no authorized context exists.
 - Do not return an answer if citations fail verification.
