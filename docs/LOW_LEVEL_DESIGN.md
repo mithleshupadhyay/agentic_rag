@@ -671,6 +671,7 @@ Endpoints:
 
 ```text
 POST /query
+POST /query/stream
 GET  /query
 GET  /query/{agent_run_id}
 POST /query/{agent_run_id}/cancel
@@ -745,6 +746,27 @@ class QueryResponse(BaseModel):
     synthesis_error: str | None = None
 ```
 
+Streaming response:
+
+```text
+POST /query/stream
+Content-Type: text/event-stream
+
+event: query_started
+data: {"event":"query_started","agent_run_id":"...","data":{"request_id":"..."}}
+
+event: query_completed
+data: {"event":"query_completed","agent_run_id":"...","data":{"response":{...}}}
+
+event: query_failed
+data: {"event":"query_failed","agent_run_id":"...","data":{"error_type":"...","error_message":"..."}}
+```
+
+The current streaming endpoint reuses the existing BM25 query flow and streams
+query lifecycle events around the final `QueryResponse`. Token-by-token LLM
+streaming is intentionally deferred until the LLM and agent runtime streaming
+contracts are stable.
+
 Query run endpoints:
 
 ```text
@@ -766,7 +788,6 @@ POST /query/{agent_run_id}/cancel
 Future query endpoints:
 
 ```text
-POST /query/stream
 GET  /query/{agent_run_id}/steps
 ```
 

@@ -1,6 +1,6 @@
 import logging
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ def run_bm25_query(
     request: QueryRequest,
     db: Session | None = None,
     request_id: str | None = None,
+    agent_run_id: UUID | None = None,
 ) -> QueryResponse:
     logger.info(
         f"[Query] BM25 query started tenant={user_context.tenant_id} "
@@ -54,7 +55,8 @@ def run_bm25_query(
         )
         filters.workspace_id = request.workspace_id
 
-    agent_run_id = uuid4()
+    # Use a caller-provided id when streaming announced the run first.
+    agent_run_id = agent_run_id or uuid4()
     query_run = None
     if db is not None:
         query_run = create_query_run(

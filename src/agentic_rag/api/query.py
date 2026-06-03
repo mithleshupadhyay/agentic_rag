@@ -1,7 +1,9 @@
+import json
 import logging
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.dependencies import require_scope
@@ -21,6 +23,7 @@ from agentic_rag.shared.schemas.query import (
     QueryRunRead,
     QueryRunSearchResponse,
     QueryRunStatus,
+    QueryStreamEvent,
 )
 from agentic_rag.shared.schemas.retrieval import RetrievalFilters, RetrievalStrategy
 
@@ -56,6 +59,96 @@ def query_endpoint(
         f"context_chunks={len(response.context)}"
     )
     return response
+
+
+@router.post("/query/stream")
+def query_stream_endpoint(
+    request: Request,
+    payload: QueryRequest,
+    user_context: UserContext = Depends(require_scope("query:run")),
+    db: Session = Depends(get_session),
+) -> StreamingResponse:
+    request_id = getattr(request.state, "request_id", None)
+    agent_run_id = uuid4()
+    logger.info(
+        f"[QueryAPI] Streaming query started tenant={user_context.tenant_id} "
+        f"user={user_context.id} request_id={request_id} agent_run_id={agent_run_id}"
+    )
+
+    # Prepare the started event.
+    started_event = QueryStreamEvent(
+        event="query_started",
+        agent_run_id=agent_run_id,
+        data={
+            "request_id": request_id,
+            "tenant_id": user_context.tenant_id,
+            "user_id": user_context.id,
+        },
+    )
+    started_payload = started_event.model_dump(mode="json")
+    started_event_message = (
+        f"event: {started_event.event}\n"
+        f"data: {json.dumps(started_payload, separators=(',', ':'))}\n\n"
+    )
+
+    try:
+        # Run the current BM25 flow for this lifecycle stream.
+        stream_request = payload.model_copy(update={"stream": True})
+        response = run_bm25_query(
+            user_context=user_context,
+            request=stream_request,
+            db=db,
+            request_id=request_id,
+            agent_run_id=agent_run_id,
+        )
+
+        # Send the final response as the completed event.
+        completed_event = QueryStreamEvent(
+            event="query_completed",
+            agent_run_id=response.agent_run_id,
+            data={"response": response.model_dump(mode="json")},
+        )
+        completed_payload = completed_event.model_dump(mode="json")
+        completed_event_message = (
+            f"event: {completed_event.event}\n"
+            f"data: {json.dumps(completed_payload, separators=(',', ':'))}\n\n"
+        )
+        logger.info(
+            f"[QueryAPI] Streaming query completed tenant={user_context.tenant_id} "
+            f"user={user_context.id} request_id={request_id} "
+            f"agent_run_id={response.agent_run_id}"
+        )
+        return StreamingResponse(
+            iter((started_event_message, completed_event_message)),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    except Exception as e:
+        logger.exception(
+            f"[QueryAPI] Streaming query failed tenant={user_context.tenant_id} "
+            f"user={user_context.id} request_id={request_id} "
+            f"agent_run_id={agent_run_id}: {e}"
+        )
+        failed_event = QueryStreamEvent(
+            event="query_failed",
+            agent_run_id=agent_run_id,
+            data={
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "request_id": request_id,
+            },
+        )
+        failed_payload = failed_event.model_dump(mode="json")
+        failed_event_message = (
+            f"event: {failed_event.event}\n"
+            f"data: {json.dumps(failed_payload, separators=(',', ':'))}\n\n"
+        )
+        return StreamingResponse(
+            iter((started_event_message, failed_event_message)),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
 
 
 @router.get("/query", response_model=QueryRunSearchResponse)
