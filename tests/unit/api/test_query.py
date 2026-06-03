@@ -277,6 +277,187 @@ def test_get_query_run_endpoint_rejects_other_user() -> None:
         db.close()
 
 
+def test_cancel_query_run_endpoint_cancels_owner_run() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        agent_run_id = uuid4()
+        create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="security policy", workspace_id="workspace-a"),
+            agent_run_id=agent_run_id,
+            request_id="request-id-1",
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.post(f"/query/{agent_run_id}/cancel")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["agent_run_id"] == str(agent_run_id)
+        assert body["status"] == "cancelled"
+        assert body["tenant_id"] == "tenant-a"
+        assert body["workspace_id"] == "workspace-a"
+        assert body["completed_at"] is not None
+    finally:
+        db.close()
+
+
+def test_cancel_query_run_endpoint_allows_admin_to_cancel_other_user_run() -> None:
+    db = create_test_db()
+    try:
+        owner_context = UserContext(
+            id="owner",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            scopes=["query:run"],
+        )
+        admin_context = UserContext(
+            id="admin-user",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            roles=["admin"],
+            scopes=["query:run"],
+        )
+        agent_run_id = uuid4()
+        create_query_run(
+            user_context=owner_context,
+            db=db,
+            request=QueryRequest(query="security policy"),
+            agent_run_id=agent_run_id,
+        )
+
+        for client in client_with_user(admin_context, db):
+            response = client.post(f"/query/{agent_run_id}/cancel")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "cancelled"
+        assert body["user_id"] == "owner"
+    finally:
+        db.close()
+
+
+def test_cancel_query_run_endpoint_rejects_other_user() -> None:
+    db = create_test_db()
+    try:
+        owner_context = UserContext(
+            id="owner",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            scopes=["query:run"],
+        )
+        requester_context = UserContext(
+            id="requester",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            scopes=["query:run"],
+        )
+        agent_run_id = uuid4()
+        create_query_run(
+            user_context=owner_context,
+            db=db,
+            request=QueryRequest(query="security policy"),
+            agent_run_id=agent_run_id,
+        )
+
+        for client in client_with_user(requester_context, db):
+            response = client.post(f"/query/{agent_run_id}/cancel")
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Query run access denied."
+    finally:
+        db.close()
+
+
+def test_cancel_query_run_endpoint_is_tenant_scoped() -> None:
+    db = create_test_db()
+    try:
+        owner_context = UserContext(
+            id="owner",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            scopes=["query:run"],
+        )
+        tenant_b_context = UserContext(
+            id="owner",
+            customer_id="tenant-b",
+            tenant_id="tenant-b",
+            scopes=["query:run"],
+        )
+        agent_run_id = uuid4()
+        create_query_run(
+            user_context=owner_context,
+            db=db,
+            request=QueryRequest(query="security policy"),
+            agent_run_id=agent_run_id,
+        )
+
+        for client in client_with_user(tenant_b_context, db):
+            response = client.post(f"/query/{agent_run_id}/cancel")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Query run not found."
+    finally:
+        db.close()
+
+
+def test_cancel_query_run_endpoint_rejects_completed_run() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            scopes=["query:run"],
+        )
+        document_id = uuid4()
+        chunk_id = uuid4()
+        agent_run_id = uuid4()
+        query_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="security policy"),
+            agent_run_id=agent_run_id,
+        )
+        citation = Citation(
+            document_id=document_id,
+            chunk_id=chunk_id,
+            title="Security Policy",
+            quote="Security policy content.",
+            score=1.2,
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=query_run,
+            response=QueryResponse(
+                agent_run_id=agent_run_id,
+                answer="Security policy content [1].",
+                citations=[citation],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=20,
+                synthesis_enabled=False,
+            ),
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.post(f"/query/{agent_run_id}/cancel")
+
+        assert response.status_code == 409
+        assert "completed" in response.json()["detail"]
+    finally:
+        db.close()
+
+
 def test_list_query_run_endpoint_returns_only_current_user_runs() -> None:
     db = create_test_db()
     try:

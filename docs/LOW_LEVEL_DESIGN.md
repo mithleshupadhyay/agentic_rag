@@ -673,6 +673,7 @@ Endpoints:
 POST /query
 GET  /query
 GET  /query/{agent_run_id}
+POST /query/{agent_run_id}/cancel
 ```
 
 The query flow is retrieval-first. It calls BM25 retrieval, builds a safe
@@ -755,6 +756,11 @@ GET /query
 GET /query/{agent_run_id}
 - Returns one tenant-scoped query run by run id.
 - Enforces workspace and owner access before returning the stored response.
+
+POST /query/{agent_run_id}/cancel
+- Cancels a tenant-scoped queued or running query run.
+- Enforces the same workspace and owner/admin access rules as query-run fetch.
+- Returns `409 Conflict` when the run is already completed, failed, or cancelled.
 ```
 
 Future query endpoints:

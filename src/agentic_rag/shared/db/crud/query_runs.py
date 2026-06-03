@@ -144,6 +144,59 @@ def mark_query_run_failed(
         )
 
 
+def cancel_query_run(
+    db: Session,
+    agent_run_id: UUID,
+    tenant_id: str,
+) -> Optional[QueryRun]:
+    logger.info(f"[DB] Cancelling query run {agent_run_id} tenant={tenant_id}")
+    query_run = (
+        db.query(QueryRun)
+        .filter(
+            QueryRun.id == agent_run_id,
+            QueryRun.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    if not query_run:
+        logger.warning(
+            f"[DB] Query run {agent_run_id} not found for cancellation "
+            f"tenant={tenant_id}"
+        )
+        return None
+
+    # Only active runs can move to cancelled.
+    if query_run.status not in {
+        QueryRunStatus.QUEUED.value,
+        QueryRunStatus.RUNNING.value,
+    }:
+        logger.warning(
+            f"[DB] Query run {agent_run_id} cancellation rejected "
+            f"tenant={tenant_id} status={query_run.status}"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=f"Query run cannot be cancelled from status {query_run.status}.",
+        )
+
+    query_run.status = QueryRunStatus.CANCELLED.value
+    query_run.completed_at = datetime.now(timezone.utc)
+
+    try:
+        db.commit()
+        db.refresh(query_run)
+        logger.info(f"[DB] Query run {query_run.id} cancelled")
+        return query_run
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to cancel query run {agent_run_id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during query run cancellation.",
+        )
+
+
 def get_query_run(
     db: Session,
     agent_run_id: UUID,

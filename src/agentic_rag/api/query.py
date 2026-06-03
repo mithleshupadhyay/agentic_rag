@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.query.bm25_query import run_bm25_query
-from agentic_rag.shared.db.crud.query_runs import get_query_run, list_query_runs
+from agentic_rag.shared.db.crud.query_runs import (
+    cancel_query_run,
+    get_query_run,
+    list_query_runs,
+)
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.common import PageResponse
 from agentic_rag.shared.schemas.query import (
@@ -173,6 +177,102 @@ def get_query_run_endpoint(
 
     logger.info(
         f"[QueryAPI] Fetched query run {agent_run_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
+
+    response = None
+    if query_run.response_payload:
+        response = QueryResponse.model_validate(query_run.response_payload)
+
+    return QueryRunRead(
+        agent_run_id=query_run.id,
+        status=QueryRunStatus(query_run.status),
+        tenant_id=query_run.tenant_id,
+        workspace_id=query_run.workspace_id,
+        user_id=query_run.user_id,
+        request_id=query_run.request_id,
+        conversation_id=query_run.conversation_id,
+        query=query_run.query_text,
+        filters=RetrievalFilters.model_validate(query_run.filters),
+        retrieval_limit=query_run.retrieval_limit,
+        max_context_chunks=query_run.max_context_chunks,
+        max_context_tokens=query_run.max_context_tokens,
+        retrieval_strategy=(
+            RetrievalStrategy(query_run.retrieval_strategy)
+            if query_run.retrieval_strategy
+            else None
+        ),
+        answer=query_run.answer,
+        citations=query_run.citations.get("items", []),
+        context_token_count=query_run.context_token_count,
+        confidence_score=query_run.confidence_score,
+        latency_ms=query_run.latency_ms,
+        synthesis_enabled=query_run.synthesis_enabled,
+        llm_provider=query_run.llm_provider,
+        llm_model=query_run.llm_model,
+        llm_input_tokens=query_run.llm_input_tokens,
+        llm_output_tokens=query_run.llm_output_tokens,
+        llm_cost_estimate=query_run.llm_cost_estimate,
+        error_type=query_run.error_type,
+        error_message=query_run.error_message,
+        response_payload=query_run.response_payload,
+        created_at=query_run.created_at,
+        updated_at=query_run.updated_at,
+        completed_at=query_run.completed_at,
+        response=response,
+    )
+
+
+@router.post("/query/{agent_run_id}/cancel", response_model=QueryRunRead)
+def cancel_query_run_endpoint(
+    agent_run_id: UUID,
+    user_context: UserContext = Depends(require_scope("query:run")),
+    db: Session = Depends(get_session),
+) -> QueryRunRead:
+    logger.info(
+        f"[QueryAPI] Cancelling query run {agent_run_id} "
+        f"tenant={user_context.tenant_id} user={user_context.id}"
+    )
+
+    # Fetch the run in the current tenant before authorization checks.
+    query_run = get_query_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id=user_context.tenant_id,
+    )
+    if not query_run:
+        raise HTTPException(status_code=404, detail="Query run not found.")
+
+    # Enforce workspace access first.
+    if (
+        user_context.workspace_id
+        and query_run.workspace_id
+        and user_context.workspace_id != query_run.workspace_id
+    ):
+        logger.warning(
+            f"[QueryAPI] Query run {agent_run_id} cancellation denied by workspace "
+            f"user_workspace={user_context.workspace_id} run_workspace={query_run.workspace_id}"
+        )
+        raise HTTPException(status_code=403, detail="Workspace access denied.")
+
+    # Non-admin users can cancel only their own runs.
+    if "admin" not in (user_context.roles or []) and query_run.user_id != user_context.id:
+        logger.warning(
+            f"[QueryAPI] Query run {agent_run_id} cancellation denied "
+            f"for user={user_context.id} owner={query_run.user_id}"
+        )
+        raise HTTPException(status_code=403, detail="Query run access denied.")
+
+    query_run = cancel_query_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id=user_context.tenant_id,
+    )
+    if not query_run:
+        raise HTTPException(status_code=404, detail="Query run not found.")
+
+    logger.info(
+        f"[QueryAPI] Cancelled query run {agent_run_id} "
         f"tenant={user_context.tenant_id} user={user_context.id}"
     )
 

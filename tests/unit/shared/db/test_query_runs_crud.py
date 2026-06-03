@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.query_runs import (
+    cancel_query_run,
     create_query_run,
     get_query_run,
     list_query_runs,
@@ -173,6 +174,110 @@ def test_mark_query_run_failed_defaults_missing_latency_to_zero(db: Session) -> 
     assert failed.llm_input_tokens == 0
     assert failed.llm_output_tokens == 0
     assert failed.llm_cost_estimate == 0.0
+
+
+def test_cancel_query_run_marks_running_run_cancelled(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    agent_run_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    create_query_run(
+        user_context=user_context,
+        db=db,
+        request=QueryRequest(query="security policy"),
+        agent_run_id=agent_run_id,
+    )
+
+    cancelled = cancel_query_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert cancelled is not None
+    assert cancelled.id == agent_run_id
+    assert cancelled.status == QueryRunStatus.CANCELLED
+    assert cancelled.completed_at is not None
+
+
+def test_cancel_query_run_is_tenant_scoped(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    add_tenant(db, "tenant-b")
+    agent_run_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    create_query_run(
+        user_context=user_context,
+        db=db,
+        request=QueryRequest(query="security policy"),
+        agent_run_id=agent_run_id,
+    )
+
+    cancelled = cancel_query_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-b",
+    )
+    stored = get_query_run(db, agent_run_id, "tenant-a")
+
+    assert cancelled is None
+    assert stored is not None
+    assert stored.status == QueryRunStatus.RUNNING
+    assert stored.completed_at is None
+
+
+def test_cancel_query_run_rejects_completed_run(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    document_id = uuid4()
+    chunk_id = uuid4()
+    agent_run_id = uuid4()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    query_run = create_query_run(
+        user_context=user_context,
+        db=db,
+        request=QueryRequest(query="security policy"),
+        agent_run_id=agent_run_id,
+    )
+    citation = Citation(
+        document_id=document_id,
+        chunk_id=chunk_id,
+        title="Security Policy",
+        quote="Security policy content.",
+        score=1.2,
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=query_run,
+        response=QueryResponse(
+            agent_run_id=agent_run_id,
+            answer="Security policy content [1].",
+            citations=[citation],
+            context_token_count=3,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=25,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        cancel_query_run(
+            db=db,
+            agent_run_id=agent_run_id,
+            tenant_id="tenant-a",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "completed" in exc_info.value.detail
 
 
 def test_get_and_list_query_runs_are_tenant_scoped(db: Session) -> None:
