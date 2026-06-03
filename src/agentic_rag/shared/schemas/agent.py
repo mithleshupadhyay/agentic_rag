@@ -117,3 +117,11 @@ class AgentCheckpoint(APIModel):
     state: dict[str, Any]
     created_at: datetime
 
+
+class AgentGraphState(APIModel):
+    agent_state: AgentStateModel
+    limits: AgentLimits = Field(default_factory=AgentLimits)
+    checkpoints: list[AgentCheckpoint] = Field(default_factory=list)
+    status: AgentRunStatus = AgentRunStatus.RUNNING
+    stop_reason: str | None = None
+    current_time: datetime | None = None

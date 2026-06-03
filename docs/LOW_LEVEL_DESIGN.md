@@ -951,15 +951,23 @@ Gateway through contracts.
 Current local implementation:
 
 ```text
+src/agentic_rag/agent/graph.py
 src/agentic_rag/agent/runtime.py
 ```
 
 The local runtime skeleton creates `AgentStateModel` instances from
 `AuthContext` and `AgentLimits`, records node progress, increments step and tool
 call counts, evaluates guardrails, applies the standard safe fallback answer,
-and returns an `AgentCheckpoint` payload after each recorded node. This first
-slice intentionally does not wire LangGraph, internal API endpoints, database
-persistence, retrieval execution, or LLM calls yet.
+and returns an `AgentCheckpoint` payload after each recorded node.
+
+The first local LangGraph slice now compiles a controlled graph around the
+runtime guardrails. It runs deterministic planning nodes for intent
+classification, query rewrite, filter planning, and retrieval strategy
+selection, records a checkpoint after each node, and stops immediately if the
+existing runtime guardrails return a timeout or handoff decision. This graph
+intentionally stops at the retrieval boundary. It does not add internal API
+endpoints, database persistence, retrieval tool execution, LLM calls,
+cancellation wiring, or streaming events yet.
 
 ### LLM Gateway
 
