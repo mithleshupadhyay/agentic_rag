@@ -22,6 +22,7 @@ from agentic_rag.shared.kafka.events import EventEnvelope, EventType
 from agentic_rag.shared.kafka.topics import (
     DLQ_INGESTION,
     INGESTION_EMBED,
+    INGESTION_INDEX,
     INGESTION_PARSE,
     RETRY_INGESTION,
 )
@@ -189,7 +190,7 @@ def test_process_ingestion_job_reads_object_and_stores_chunks(db: Session) -> No
     assert object_store.read_keys == [document.object_key]
 
 
-def test_process_ingestion_job_publishes_embedding_event(
+def test_process_ingestion_job_publishes_embedding_and_indexing_events(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,6 +209,11 @@ def test_process_ingestion_job_publishes_embedding_event(
         "embedding_vector_version",
         2,
     )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "opensearch_chunk_index",
+        "chunks-test",
+    )
 
     process_ingestion_job(
         db=db,
@@ -222,19 +228,40 @@ def test_process_ingestion_job_publishes_embedding_event(
         .all()
     )
 
-    assert len(event_publisher.published) == 1
-    topic, envelope = event_publisher.published[0]
-    assert topic == INGESTION_EMBED
-    assert envelope.event_type == EventType.DOCUMENT_EMBED_REQUESTED
-    assert envelope.tenant_id == "tenant-a"
-    assert envelope.workspace_id == "workspace-a"
-    assert envelope.correlation_id == str(job.id)
-    assert envelope.idempotency_key == f"ingestion-embed:{job.id}"
-    assert envelope.payload["job_id"] == str(job.id)
-    assert envelope.payload["document_id"] == str(document.id)
-    assert envelope.payload["chunk_ids"] == [str(chunk.id) for chunk in stored_chunks]
-    assert envelope.payload["embedding_model"] == "text-embedding-test"
-    assert envelope.payload["vector_version"] == 2
+    assert len(event_publisher.published) == 2
+    published_by_topic = {
+        topic: envelope
+        for topic, envelope in event_publisher.published
+    }
+
+    embed_envelope = published_by_topic[INGESTION_EMBED]
+    assert embed_envelope.event_type == EventType.DOCUMENT_EMBED_REQUESTED
+    assert embed_envelope.tenant_id == "tenant-a"
+    assert embed_envelope.workspace_id == "workspace-a"
+    assert embed_envelope.correlation_id == str(job.id)
+    assert embed_envelope.idempotency_key == f"ingestion-embed:{job.id}"
+    assert embed_envelope.payload["job_id"] == str(job.id)
+    assert embed_envelope.payload["document_id"] == str(document.id)
+    assert embed_envelope.payload["chunk_ids"] == [
+        str(chunk.id)
+        for chunk in stored_chunks
+    ]
+    assert embed_envelope.payload["embedding_model"] == "text-embedding-test"
+    assert embed_envelope.payload["vector_version"] == 2
+
+    index_envelope = published_by_topic[INGESTION_INDEX]
+    assert index_envelope.event_type == EventType.DOCUMENT_INDEX_REQUESTED
+    assert index_envelope.tenant_id == "tenant-a"
+    assert index_envelope.workspace_id == "workspace-a"
+    assert index_envelope.correlation_id == str(job.id)
+    assert index_envelope.idempotency_key == f"ingestion-index:{job.id}"
+    assert index_envelope.payload["job_id"] == str(job.id)
+    assert index_envelope.payload["document_id"] == str(document.id)
+    assert index_envelope.payload["chunk_ids"] == [
+        str(chunk.id)
+        for chunk in stored_chunks
+    ]
+    assert index_envelope.payload["index_name"] == "chunks-test"
 
 
 def test_run_ingestion_worker_once_claims_and_processes_job(

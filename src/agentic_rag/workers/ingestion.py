@@ -30,6 +30,7 @@ from agentic_rag.shared.kafka.events import (
     EmbedChunksPayload,
     EventEnvelope,
     EventType,
+    IndexChunksPayload,
     IngestionDLQPayload,
     IngestionRetryPayload,
     ParseDocumentPayload,
@@ -281,6 +282,32 @@ def process_ingestion_job(
                 logger.exception(
                     f"[IngestionWorker] Failed to publish embedding event "
                     f"job={job.id} topic={INGESTION_EMBED}: {publish_error}"
+                )
+
+            index_payload = IndexChunksPayload(
+                job_id=job.id,
+                document_id=document.id,
+                chunk_ids=[chunk.id for chunk in stored_chunks],
+                index_name=settings.opensearch_chunk_index,
+            )
+            index_envelope = EventEnvelope(
+                event_type=EventType.DOCUMENT_INDEX_REQUESTED,
+                tenant_id=job.tenant_id,
+                workspace_id=job.workspace_id,
+                correlation_id=str(job.id),
+                idempotency_key=f"ingestion-index:{job.id}",
+                payload=index_payload.model_dump(mode="json"),
+            )
+            try:
+                event_publisher(INGESTION_INDEX, index_envelope)
+                logger.info(
+                    f"[IngestionWorker] Published BM25 indexing event job={job.id} "
+                    f"topic={INGESTION_INDEX} chunks={len(stored_chunks)}"
+                )
+            except Exception as publish_error:
+                logger.exception(
+                    f"[IngestionWorker] Failed to publish BM25 indexing event "
+                    f"job={job.id} topic={INGESTION_INDEX}: {publish_error}"
                 )
 
         job = mark_ingestion_job_completed(db, job)

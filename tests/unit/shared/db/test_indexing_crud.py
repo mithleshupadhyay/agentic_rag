@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -137,3 +138,75 @@ def test_mark_chunk_bm25_failed_records_error(db: Session) -> None:
 
     assert failed_chunk.bm25_index_status == "failed"
     assert failed_chunk.bm25_index_error == "OpenSearch unavailable"
+
+
+def test_list_chunks_pending_bm25_index_filters_document_and_chunks(
+    db: Session,
+) -> None:
+    document, first_chunk = create_ready_document_with_chunk(db)
+    first_chunk_id = first_chunk.id
+    db.delete(first_chunk)
+    db.commit()
+    db.refresh(document)
+    second_chunk = replace_document_chunks(
+        db=db,
+        document=document,
+        chunks=[
+            {
+                "chunk_index": 0,
+                "content": "First policy section.",
+                "content_hash": "hash-1",
+                "token_count": 3,
+                "metadata": {},
+            },
+            {
+                "chunk_index": 1,
+                "content": "Second policy section.",
+                "content_hash": "hash-2",
+                "token_count": 3,
+                "metadata": {},
+            },
+        ],
+    )[1]
+
+    chunks = list_chunks_pending_bm25_index(
+        db=db,
+        index_name="chunks-test",
+        tenant_id="tenant-a",
+        document_id=document.id,
+        chunk_ids=[second_chunk.id],
+    )
+
+    assert [chunk.id for chunk in chunks] == [second_chunk.id]
+    assert first_chunk_id != second_chunk.id
+
+
+def test_list_chunks_pending_bm25_index_respects_tenant_boundary(
+    db: Session,
+) -> None:
+    _, tenant_a_chunk = create_ready_document_with_chunk(db, tenant_id="tenant-a")
+    _, tenant_b_chunk = create_ready_document_with_chunk(db, tenant_id="tenant-b")
+
+    chunks = list_chunks_pending_bm25_index(
+        db=db,
+        index_name="chunks-test",
+        tenant_id="tenant-a",
+        chunk_ids=[tenant_a_chunk.id, tenant_b_chunk.id],
+    )
+
+    assert [chunk.id for chunk in chunks] == [tenant_a_chunk.id]
+
+
+def test_list_chunks_pending_bm25_index_skips_unknown_chunk_id(
+    db: Session,
+) -> None:
+    create_ready_document_with_chunk(db)
+
+    chunks = list_chunks_pending_bm25_index(
+        db=db,
+        index_name="chunks-test",
+        tenant_id="tenant-a",
+        chunk_ids=[uuid4()],
+    )
+
+    assert chunks == []

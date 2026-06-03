@@ -1180,9 +1180,11 @@ publisher.
 
 After parsing and chunk replacement succeeds, the ingestion worker emits a
 `DOCUMENT_EMBED_REQUESTED` envelope with `EmbedChunksPayload` to
-`ingestion.embed` when an event publisher is configured. If the embed publish
-fails, ingestion still completes because the embedding worker can discover the
-same missing chunks through its DB polling path.
+`ingestion.embed` and a `DOCUMENT_INDEX_REQUESTED` envelope with
+`IndexChunksPayload` to `ingestion.index` when an event publisher is configured.
+If either publish fails, ingestion still completes because the embedding and
+indexing workers can discover the same missing chunks through their DB polling
+paths.
 
 `KafkaEventPublisher` serializes the validated `EventEnvelope` with
 `model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
@@ -1211,6 +1213,12 @@ The embedding worker can subscribe to `ingestion.embed` with
 the worker configuration, and then embeds only chunks matching the envelope
 tenant, payload document ID, and payload chunk IDs. DB polling remains the
 default local embedding scheduling path when Kafka consuming is disabled.
+The indexing worker can subscribe to `ingestion.index` with
+`KAFKA_INDEXING_CONSUMER_GROUP`. The indexing handler validates
+`IndexChunksPayload`, checks that the requested index name matches the worker
+OpenSearch client, and then indexes only chunks matching the envelope tenant,
+payload document ID, and payload chunk IDs. DB polling remains the default local
+BM25 indexing scheduling path when Kafka consuming is disabled.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
 DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer` runs

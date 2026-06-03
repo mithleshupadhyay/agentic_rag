@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import or_
@@ -19,12 +20,15 @@ def list_chunks_pending_bm25_index(
     limit: Optional[int] = None,
     index_name: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    document_id: Optional[UUID] = None,
+    chunk_ids: Optional[list[UUID]] = None,
 ) -> list[DocumentChunk]:
     limit = limit or settings.bm25_index_batch_size
     index_name = index_name or settings.opensearch_chunk_index
     logger.info(
         f"[DB] Listing chunks pending BM25 index limit={limit} "
-        f"index={index_name} tenant={tenant_id}"
+        f"index={index_name} tenant={tenant_id} document={document_id} "
+        f"chunk_count={len(chunk_ids or [])}"
     )
 
     query = (
@@ -48,11 +52,15 @@ def list_chunks_pending_bm25_index(
             ),
         )
         .order_by(DocumentChunk.updated_at.asc(), DocumentChunk.created_at.asc())
-        .limit(limit)
     )
 
     if tenant_id:
         query = query.filter(DocumentChunk.tenant_id == tenant_id)
+    if document_id:
+        query = query.filter(DocumentChunk.document_id == document_id)
+    if chunk_ids:
+        query = query.filter(DocumentChunk.id.in_(chunk_ids))
+    query = query.limit(limit)
 
     bind = db.get_bind()
     dialect_name = bind.dialect.name if bind else ""
