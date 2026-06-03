@@ -22,10 +22,11 @@ retrieval quality, and production operations.
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add more focused Docker smoke scripts for OpenSearch, pgvector retrieval, and full upload-to-query flow. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
+| `src/agentic_rag/observability/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle and latency metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, provider health, and worker queues as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, and ingestion job creation. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
-| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing, query-run cancellation, and lifecycle SSE streaming. | Add token-level LLM streaming, richer verification status, richer status filtering, and OpenAPI examples for query-run responses. | High |
+| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing, query-run cancellation, lifecycle SSE streaming, and low-cardinality query metric recording. | Add token-level LLM streaming, richer verification status, richer status filtering, dashboard panels, alert rules, and OpenAPI examples for query-run responses. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -75,7 +76,7 @@ retrieval quality, and production operations.
 | `tests/unit/api/test_documents.py` | Document API tests, including upload behavior. | Add more authorization edge cases, idempotent upload tests, ingestion status tests, and large file validation tests. | High |
 | `tests/unit/api/test_health.py` | Health API tests. | Add readiness dependency status tests and degraded/unhealthy response tests. | Medium |
 | `tests/unit/api/test_retrieval.py` | Retrieval API tests for BM25, vector, hybrid search, and rerank endpoints. | Add error mapping, empty-result behavior, mocked OpenSearch failures, and integration smoke tests for `/retrieval/bm25-search`, `/retrieval/vector-search`, `/retrieval/hybrid-search`, and `/retrieval/rerank`. | High |
-| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, query-run cancellation authorization, and lifecycle streaming response tests. | Add token-level streaming tests, LLM synthesis path tests, richer failure fallback tests, and admin query-run listing tests. | High |
+| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, query-run cancellation authorization, lifecycle streaming response tests, and query lifecycle metric assertions. | Add token-level streaming tests, LLM synthesis path tests, richer failure fallback tests, and admin query-run listing tests. | High |
 | `tests/unit/core/test_auth.py` | Auth tests. | Add OIDC JWKS cache tests, invalid issuer/audience tests, tenant claim mapping tests, and scope mapping tests. | High |
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
@@ -102,6 +103,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-03 | Added low-cardinality Prometheus metrics for query lifecycle counts and query latency. |
 | 2026-06-03 | Added lifecycle SSE streaming for query responses with `query_started`, `query_completed`, and `query_failed` events around the existing BM25 query flow. |
 | 2026-06-03 | Added tenant-scoped query-run cancellation with owner/admin API authorization and conflict handling for completed, failed, or cancelled runs. |
 | 2026-06-03 | Added the local agent runtime skeleton with max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. |
@@ -110,7 +112,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add production observability dashboards for ingestion, indexing, retrieval, query, LLM cost, and tenant quotas. |
+| 1 | Add first dashboard panels and alert rules for query lifecycle metrics. |
 | 2 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
 | 3 | Add provider health snapshots and safe circuit-breaker metrics. |
 | 4 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |

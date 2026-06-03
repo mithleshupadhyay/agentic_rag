@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,6 +9,10 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.observability.metrics import (
+    QUERY_LATENCY_SECONDS,
+    QUERY_LIFECYCLE_TOTAL,
+)
 from agentic_rag.query.bm25_query import run_bm25_query
 from agentic_rag.shared.db.crud.query_runs import (
     cancel_query_run,
@@ -41,23 +46,57 @@ def query_endpoint(
     db: Session = Depends(get_session),
 ) -> QueryResponse:
     request_id = getattr(request.state, "request_id", None)
+    started_at = time.perf_counter()
+    retrieval_strategy_label = RetrievalStrategy.BM25.value
+    synthesis_enabled_label = "false"
     logger.info(
         f"[QueryAPI] Query started tenant={user_context.tenant_id} "
         f"user={user_context.id} request_id={request_id}"
     )
+    QUERY_LIFECYCLE_TOTAL.labels(
+        status="started",
+        retrieval_strategy=retrieval_strategy_label,
+        synthesis_enabled=synthesis_enabled_label,
+    ).inc()
 
-    response = run_bm25_query(
-        user_context=user_context,
-        request=payload,
-        db=db,
-        request_id=request_id,
-    )
+    try:
+        response = run_bm25_query(
+            user_context=user_context,
+            request=payload,
+            db=db,
+            request_id=request_id,
+        )
+
+    except Exception:
+        QUERY_LIFECYCLE_TOTAL.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).inc()
+        QUERY_LATENCY_SECONDS.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).observe(max(0.0, time.perf_counter() - started_at))
+        raise
 
     logger.info(
         f"[QueryAPI] Query completed tenant={user_context.tenant_id} "
         f"user={user_context.id} request_id={request_id} "
         f"context_chunks={len(response.context)}"
     )
+    retrieval_strategy_label = response.retrieval_strategy.value
+    synthesis_enabled_label = str(response.synthesis_enabled).lower()
+    QUERY_LIFECYCLE_TOTAL.labels(
+        status="completed",
+        retrieval_strategy=retrieval_strategy_label,
+        synthesis_enabled=synthesis_enabled_label,
+    ).inc()
+    QUERY_LATENCY_SECONDS.labels(
+        status="completed",
+        retrieval_strategy=retrieval_strategy_label,
+        synthesis_enabled=synthesis_enabled_label,
+    ).observe(max(response.latency_ms, 0) / 1000)
     return response
 
 
@@ -70,10 +109,18 @@ def query_stream_endpoint(
 ) -> StreamingResponse:
     request_id = getattr(request.state, "request_id", None)
     agent_run_id = uuid4()
+    started_at = time.perf_counter()
+    retrieval_strategy_label = RetrievalStrategy.BM25.value
+    synthesis_enabled_label = "false"
     logger.info(
         f"[QueryAPI] Streaming query started tenant={user_context.tenant_id} "
         f"user={user_context.id} request_id={request_id} agent_run_id={agent_run_id}"
     )
+    QUERY_LIFECYCLE_TOTAL.labels(
+        status="started",
+        retrieval_strategy=retrieval_strategy_label,
+        synthesis_enabled=synthesis_enabled_label,
+    ).inc()
 
     # Prepare the started event.
     started_event = QueryStreamEvent(
@@ -113,6 +160,18 @@ def query_stream_endpoint(
             f"event: {completed_event.event}\n"
             f"data: {json.dumps(completed_payload, separators=(',', ':'))}\n\n"
         )
+        retrieval_strategy_label = response.retrieval_strategy.value
+        synthesis_enabled_label = str(response.synthesis_enabled).lower()
+        QUERY_LIFECYCLE_TOTAL.labels(
+            status="completed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).inc()
+        QUERY_LATENCY_SECONDS.labels(
+            status="completed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).observe(max(response.latency_ms, 0) / 1000)
         logger.info(
             f"[QueryAPI] Streaming query completed tenant={user_context.tenant_id} "
             f"user={user_context.id} request_id={request_id} "
@@ -130,6 +189,16 @@ def query_stream_endpoint(
             f"user={user_context.id} request_id={request_id} "
             f"agent_run_id={agent_run_id}: {e}"
         )
+        QUERY_LIFECYCLE_TOTAL.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).inc()
+        QUERY_LATENCY_SECONDS.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy_label,
+            synthesis_enabled=synthesis_enabled_label,
+        ).observe(max(0.0, time.perf_counter() - started_at))
         failed_event = QueryStreamEvent(
             event="query_failed",
             agent_run_id=agent_run_id,
@@ -368,6 +437,11 @@ def cancel_query_run_endpoint(
         f"[QueryAPI] Cancelled query run {agent_run_id} "
         f"tenant={user_context.tenant_id} user={user_context.id}"
     )
+    QUERY_LIFECYCLE_TOTAL.labels(
+        status="cancelled",
+        retrieval_strategy=query_run.retrieval_strategy or RetrievalStrategy.BM25.value,
+        synthesis_enabled=str(query_run.synthesis_enabled).lower(),
+    ).inc()
 
     response = None
     if query_run.response_payload:

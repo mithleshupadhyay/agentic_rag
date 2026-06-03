@@ -704,6 +704,23 @@ context building, and deterministic answer verification first. Later steps add
 planner/tool routing, reformulation, vector search, web search, and full agent
 runtime.
 
+Current query metrics are defined in `src/agentic_rag/observability/metrics.py`
+and exposed through the existing `/metrics` endpoint:
+
+```text
+agentic_rag_query_lifecycle_total
+- Labels: status, retrieval_strategy, synthesis_enabled
+- Status values: started, completed, failed, cancelled
+
+agentic_rag_query_latency_seconds
+- Labels: status, retrieval_strategy, synthesis_enabled
+- Observed for completed and failed query execution paths
+```
+
+The query metrics intentionally exclude tenant IDs, user IDs, workspace IDs,
+request IDs, agent run IDs, raw query text, and document identifiers to avoid
+high-cardinality metrics and sensitive data exposure.
+
 Current answer verification is deterministic. Synthesized answers must cite
 returned context using bracket numbers such as `[1]`; the verifier rejects
 answers with missing citations or citations that do not map to the returned

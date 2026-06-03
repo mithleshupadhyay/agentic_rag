@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -167,6 +168,91 @@ def test_query_endpoint_requires_query_scope() -> None:
     assert response.json()["detail"] == "Missing required scope: query:run"
 
 
+def test_query_endpoint_records_completed_metrics(monkeypatch) -> None:
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        scopes=["query:run"],
+    )
+    started_labels = {
+        "status": "started",
+        "retrieval_strategy": "bm25",
+        "synthesis_enabled": "false",
+    }
+    completed_labels = {
+        "status": "completed",
+        "retrieval_strategy": "bm25",
+        "synthesis_enabled": "false",
+    }
+    started_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            started_labels,
+        )
+        or 0
+    )
+    completed_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            completed_labels,
+        )
+        or 0
+    )
+    latency_count_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_latency_seconds_count",
+            completed_labels,
+        )
+        or 0
+    )
+
+    def fake_run_bm25_query(user_context, request, db, request_id):
+        return QueryResponse(
+            agent_run_id=uuid4(),
+            answer="LLM synthesis is not enabled yet. Retrieved 0 context chunks for this query.",
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=25,
+            synthesis_enabled=False,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.api.query.run_bm25_query",
+        fake_run_bm25_query,
+    )
+
+    for client in client_with_user(user_context):
+        response = client.post(
+            "/query",
+            json={"query": "security policy"},
+        )
+
+    assert response.status_code == 200
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            started_labels,
+        )
+        == started_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            completed_labels,
+        )
+        == completed_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_latency_seconds_count",
+            completed_labels,
+        )
+        == latency_count_before + 1
+    )
+
+
 def test_query_endpoint_validates_request_body() -> None:
     user_context = UserContext(
         id="user-1",
@@ -280,6 +366,25 @@ def test_query_stream_endpoint_returns_failed_event(monkeypatch) -> None:
         tenant_id="tenant-a",
         scopes=["query:run"],
     )
+    failed_labels = {
+        "status": "failed",
+        "retrieval_strategy": "bm25",
+        "synthesis_enabled": "false",
+    }
+    failed_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            failed_labels,
+        )
+        or 0
+    )
+    latency_count_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_latency_seconds_count",
+            failed_labels,
+        )
+        or 0
+    )
 
     def fake_run_bm25_query(user_context, request, db, request_id, agent_run_id):
         raise RuntimeError("retrieval unavailable")
@@ -311,6 +416,20 @@ def test_query_stream_endpoint_returns_failed_event(monkeypatch) -> None:
     assert failed_payload["data"]["error_type"] == "RuntimeError"
     assert failed_payload["data"]["error_message"] == "retrieval unavailable"
     assert failed_payload["data"]["request_id"] == "stream-request-id"
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_lifecycle_total",
+            failed_labels,
+        )
+        == failed_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_query_latency_seconds_count",
+            failed_labels,
+        )
+        == latency_count_before + 1
+    )
 
 
 def test_query_stream_endpoint_requires_query_scope() -> None:
@@ -432,6 +551,18 @@ def test_cancel_query_run_endpoint_cancels_owner_run() -> None:
             workspace_id="workspace-a",
             scopes=["query:run"],
         )
+        cancelled_labels = {
+            "status": "cancelled",
+            "retrieval_strategy": "bm25",
+            "synthesis_enabled": "false",
+        }
+        cancelled_before = (
+            REGISTRY.get_sample_value(
+                "agentic_rag_query_lifecycle_total",
+                cancelled_labels,
+            )
+            or 0
+        )
         agent_run_id = uuid4()
         create_query_run(
             user_context=user_context,
@@ -451,6 +582,13 @@ def test_cancel_query_run_endpoint_cancels_owner_run() -> None:
         assert body["tenant_id"] == "tenant-a"
         assert body["workspace_id"] == "workspace-a"
         assert body["completed_at"] is not None
+        assert (
+            REGISTRY.get_sample_value(
+                "agentic_rag_query_lifecycle_total",
+                cancelled_labels,
+            )
+            == cancelled_before + 1
+        )
     finally:
         db.close()
 
