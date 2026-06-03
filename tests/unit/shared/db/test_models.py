@@ -34,7 +34,7 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
         KAFKA_BOOTSTRAP_SERVERS="kafka-a:9092,kafka-b:9092",
         KAFKA_CLIENT_ID="worker-a",
         KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS=2.5,
-        KAFKA_INGESTION_RETRY_CONSUMER_GROUP="retry-group-a",
+        KAFKA_INGESTION_CONSUMER_GROUP="ingestion-group-a",
     )
 
     assert settings.kafka_publishing_enabled is True
@@ -42,7 +42,7 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
     assert settings.kafka_bootstrap_servers == "kafka-a:9092,kafka-b:9092"
     assert settings.kafka_client_id == "worker-a"
     assert settings.kafka_producer_flush_timeout_seconds == 2.5
-    assert settings.kafka_ingestion_retry_consumer_group == "retry-group-a"
+    assert settings.kafka_ingestion_consumer_group == "ingestion-group-a"
 
 
 def test_redis_and_llm_circuit_breaker_settings() -> None:

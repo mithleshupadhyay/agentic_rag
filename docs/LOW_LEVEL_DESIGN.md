@@ -1165,18 +1165,25 @@ on retryable failure publish retry event
 on terminal failure publish DLQ event
 ```
 
-The local ingestion worker currently accepts an optional event publisher
-callable. It writes the database failure state first, then emits an
-`IngestionRetryPayload` to `retry.ingestion` when `next_retry_at` is set, or an
-`IngestionDLQPayload` to `dlq.ingestion` when retries are exhausted. The Kafka
-runtime producer is intentionally separate from this contract so unit tests can
-use a fake publisher.
+The document upload API creates the tenant-scoped document and ingestion job
+first. When `KAFKA_PUBLISHING_ENABLED` is true, it then publishes a
+`DOCUMENT_PARSE_REQUESTED` envelope with `ParseDocumentPayload` to
+`ingestion.parse`. If publishing is disabled or the broker publish fails, the
+queued DB job remains available for the polling worker path.
+
+The local ingestion worker accepts an optional event publisher callable. It
+writes the database failure state first, then emits an `IngestionRetryPayload`
+to `retry.ingestion` when `next_retry_at` is set, or an `IngestionDLQPayload` to
+`dlq.ingestion` when retries are exhausted. The Kafka runtime producer is
+intentionally separate from this contract so unit tests can use a fake
+publisher.
 
 `KafkaEventPublisher` serializes the validated `EventEnvelope` with
 `model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
 provided, falls back to `event_id` otherwise, and delegates delivery to an
-injected send-compatible producer client. The ingestion worker creates a
-`kafka-python` producer at startup only when `KAFKA_PUBLISHING_ENABLED` is
+injected send-compatible producer client. The document API creates a
+`kafka-python` producer only around the upload scheduling publish. The ingestion
+worker creates a producer at startup only when `KAFKA_PUBLISHING_ENABLED` is
 true and then passes the publisher into the existing failure-event hook. DB job
 polling remains the default local scheduling mechanism.
 `KafkaEventConsumer` mirrors the producer shape for the consume side: it accepts
@@ -1185,11 +1192,13 @@ into `EventEnvelope`, commits offsets after handler success, and commits invalid
 JSON/schema messages only after logging the validation rejection so a poison
 message does not block the partition. The concrete factory creates a
 `kafka-python` consumer with automatic commits disabled. When
-`KAFKA_CONSUMING_ENABLED` is true, the ingestion worker can subscribe to
-`retry.ingestion` with `KAFKA_INGESTION_RETRY_CONSUMER_GROUP`; the retry handler
-validates `IngestionRetryPayload`, claims the referenced job through the existing
-tenant-scoped DB lease path, and only then calls the existing ingestion job
-processor.
+`KAFKA_CONSUMING_ENABLED` is true, the ingestion worker subscribes to
+`ingestion.parse` and `retry.ingestion` with `KAFKA_INGESTION_CONSUMER_GROUP`.
+The parse handler validates `ParseDocumentPayload`, claims the referenced
+queued job through the existing tenant-scoped DB lease path, and only then calls
+the existing ingestion job processor. The retry handler validates
+`IngestionRetryPayload`, claims the referenced retryable job through the same
+tenant-scoped DB lease path, and then calls the processor.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
 DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer` runs
@@ -1198,9 +1207,10 @@ valid `retry.ingestion` envelope to verify the configured producer path.
 `make docker-smoke-kafka-consumer` delegates host-side Docker orchestration to
 `scripts/docker-smoke-kafka-consumer.sh`, temporarily stops the polling ingestion
 worker, and then runs `scripts/smoke_kafka_consumer.py` in the API container with
-`KAFKA_CONSUMING_ENABLED=true`. The smoke publishes one valid `retry.ingestion`
-envelope, consumes it through the concrete Kafka consumer adapter, and verifies
-the existing ingestion retry handler completes a tenant-scoped ingestion job.
+`KAFKA_CONSUMING_ENABLED=true`. The smoke currently publishes one valid
+`retry.ingestion` envelope, consumes it through the concrete Kafka consumer
+adapter, and verifies the existing ingestion retry handler completes a
+tenant-scoped ingestion job.
 
 Required worker settings:
 

@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -30,6 +31,7 @@ from agentic_rag.shared.kafka.events import (
     EventType,
     IngestionDLQPayload,
     IngestionRetryPayload,
+    ParseDocumentPayload,
 )
 from agentic_rag.shared.kafka.consumer import create_kafka_event_consumer
 from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
@@ -54,7 +56,7 @@ EventPublisher = Callable[[str, EventEnvelope], None]
 
 
 INGESTION_WORKER_ID = "ingestion-worker"
-INGESTION_RETRY_CONSUMER_ID = "ingestion-worker-retry"
+INGESTION_CONSUMER_ID = "ingestion-worker-consumer"
 
 
 TEXT_FILE_EXTENSIONS = {
@@ -377,6 +379,52 @@ def run_ingestion_worker_once(
         return True
 
 
+def handle_ingestion_parse_event(
+    envelope: EventEnvelope,
+    object_store: Optional[ObjectStoreClient] = None,
+    event_publisher: EventPublisher | None = None,
+) -> bool:
+    if envelope.event_type != EventType.DOCUMENT_PARSE_REQUESTED:
+        logger.warning(
+            f"[IngestionWorker] Skipping non-parse event "
+            f"event_type={envelope.event_type} event_id={envelope.event_id}"
+        )
+        return False
+
+    try:
+        payload = ParseDocumentPayload.model_validate(envelope.payload)
+    except ValidationError as e:
+        logger.warning(
+            f"[IngestionWorker] Skipping invalid parse payload "
+            f"event_id={envelope.event_id}: {e}"
+        )
+        return False
+
+    SessionLocal = get_sync_session_factory()
+    with SessionLocal() as db:
+        job = claim_ingestion_job_by_id(
+            db=db,
+            job_id=payload.job_id,
+            tenant_id=envelope.tenant_id,
+            worker_id=INGESTION_WORKER_ID,
+            lease_seconds=settings.ingestion_worker_lease_seconds,
+        )
+        if not job:
+            logger.info(
+                f"[IngestionWorker] Parse event did not claim job "
+                f"job={payload.job_id} tenant={envelope.tenant_id}"
+            )
+            return False
+
+        process_ingestion_job(
+            db=db,
+            job=job,
+            object_store=object_store,
+            event_publisher=event_publisher,
+        )
+        return True
+
+
 def handle_ingestion_retry_event(
     envelope: EventEnvelope,
     object_store: Optional[ObjectStoreClient] = None,
@@ -430,6 +478,33 @@ def handle_ingestion_retry_event(
         return True
 
 
+def handle_ingestion_consumer_event(
+    envelope: EventEnvelope,
+    object_store: Optional[ObjectStoreClient] = None,
+    event_publisher: EventPublisher | None = None,
+) -> None:
+    if envelope.event_type == EventType.DOCUMENT_PARSE_REQUESTED:
+        handle_ingestion_parse_event(
+            envelope=envelope,
+            object_store=object_store,
+            event_publisher=event_publisher,
+        )
+        return
+
+    if envelope.event_type == EventType.INGESTION_RETRY_SCHEDULED:
+        handle_ingestion_retry_event(
+            envelope=envelope,
+            object_store=object_store,
+            event_publisher=event_publisher,
+        )
+        return
+
+    logger.warning(
+        f"[IngestionWorker] Skipping unsupported ingestion event "
+        f"event_type={envelope.event_type} event_id={envelope.event_id}"
+    )
+
+
 def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> None:
     logger.info("[IngestionWorker] Worker loop started")
     configured_event_publisher = event_publisher
@@ -439,27 +514,23 @@ def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> 
             client_id=INGESTION_WORKER_ID,
         )
 
-    retry_consumer = None
+    ingestion_consumer = None
     try:
         if settings.kafka_consuming_enabled:
-            logger.info("[IngestionWorker] Kafka retry consumer enabled")
-
-            def handle_retry(envelope: EventEnvelope) -> None:
-                handle_ingestion_retry_event(
-                    envelope=envelope,
+            logger.info("[IngestionWorker] Kafka ingestion consumer enabled")
+            ingestion_consumer = create_kafka_event_consumer(
+                topics=[INGESTION_PARSE, RETRY_INGESTION],
+                group_id=settings.kafka_ingestion_consumer_group,
+                handler=partial(
+                    handle_ingestion_consumer_event,
                     event_publisher=configured_event_publisher,
-                )
-
-            retry_consumer = create_kafka_event_consumer(
-                topics=[RETRY_INGESTION],
-                group_id=settings.kafka_ingestion_retry_consumer_group,
-                handler=handle_retry,
-                client_id=INGESTION_RETRY_CONSUMER_ID,
+                ),
+                client_id=INGESTION_CONSUMER_ID,
             )
             try:
-                retry_consumer.run_forever()
+                ingestion_consumer.run_forever()
             except KeyboardInterrupt:
-                logger.info("[IngestionWorker] Kafka retry consumer stopped")
+                logger.info("[IngestionWorker] Kafka ingestion consumer stopped")
             return
 
         while True:
@@ -479,8 +550,8 @@ def run_ingestion_worker_loop(event_publisher: EventPublisher | None = None) -> 
         close_publisher = getattr(configured_event_publisher, "close", None)
         if callable(close_publisher):
             close_publisher()
-        if retry_consumer is not None:
-            retry_consumer.close()
+        if ingestion_consumer is not None:
+            ingestion_consumer.close()
 
 
 if __name__ == "__main__":

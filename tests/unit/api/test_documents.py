@@ -13,6 +13,8 @@ from agentic_rag.main import app
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.db.session import get_session
+from agentic_rag.shared.kafka.events import EventEnvelope, EventType
+from agentic_rag.shared.kafka.topics import INGESTION_PARSE
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import DocumentSourceType
 
@@ -169,6 +171,18 @@ class FakeObjectStore:
         self.deleted.append(object_key)
 
 
+class FakeKafkaPublisher:
+    def __init__(self):
+        self.published: list[tuple[str, EventEnvelope]] = []
+        self.closed = False
+
+    def __call__(self, topic: str, envelope: EventEnvelope) -> None:
+        self.published.append((topic, envelope))
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_create_document_endpoint_returns_document(client: TestClient) -> None:
     response = client.post(
         "/documents",
@@ -220,6 +234,53 @@ def test_upload_document_endpoint_stores_object_and_creates_ingestion_job(
     assert fake_store.uploads[0]["content_type"] == "text/plain"
     assert fake_store.uploads[0]["metadata"]["tenant_id"] == "tenant-a"
     assert fake_store.uploads[0]["metadata"]["document_id"] == body["document"]["id"]
+
+
+def test_upload_document_endpoint_publishes_ingestion_event_when_kafka_enabled(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    fake_publisher = FakeKafkaPublisher()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.create_kafka_event_publisher",
+        lambda client_id: fake_publisher,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.settings.kafka_publishing_enabled",
+        True,
+    )
+
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+        data={
+            "workspace_id": "workspace-a",
+            "idempotency_key": "upload-security-1",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert len(fake_publisher.published) == 1
+    assert fake_publisher.closed is True
+
+    topic, envelope = fake_publisher.published[0]
+    assert topic == INGESTION_PARSE
+    assert envelope.event_type == EventType.DOCUMENT_PARSE_REQUESTED
+    assert envelope.tenant_id == "tenant-a"
+    assert envelope.workspace_id == "workspace-a"
+    assert envelope.correlation_id == body["ingestion_job_id"]
+    assert envelope.idempotency_key == f"ingestion-parse:{body['ingestion_job_id']}"
+    assert envelope.payload["job_id"] == body["ingestion_job_id"]
+    assert envelope.payload["document_id"] == body["document"]["id"]
+    assert envelope.payload["object_key"] == body["object_key"]
+    assert envelope.payload["mime_type"] == "text/plain"
+    assert envelope.payload["source_type"] == "upload"
 
 
 def test_upload_document_endpoint_rejects_invalid_metadata(client: TestClient) -> None:

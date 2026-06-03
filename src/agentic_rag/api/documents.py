@@ -25,6 +25,9 @@ from agentic_rag.shared.db.crud.documents import (
     update_document,
 )
 from agentic_rag.shared.db.session import get_session
+from agentic_rag.shared.kafka.events import EventEnvelope, EventType, ParseDocumentPayload
+from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
+from agentic_rag.shared.kafka.topics import INGESTION_PARSE
 from agentic_rag.shared.schemas.auth import AclPolicy, PermissionAction
 from agentic_rag.shared.schemas.common import PageRequest, PageResponse
 from agentic_rag.shared.schemas.documents import (
@@ -207,6 +210,41 @@ def upload_document_endpoint(
         f"[DocumentAPI] Uploaded document {document.id} "
         f"ingestion_job={ingestion_job.id}"
     )
+    if settings.kafka_publishing_enabled:
+        kafka_publisher = None
+        try:
+            payload = ParseDocumentPayload(
+                job_id=ingestion_job.id,
+                document_id=document.id,
+                object_key=object_key,
+                mime_type=content_type,
+                source_type=document.source_type,
+            )
+            envelope = EventEnvelope(
+                event_type=EventType.DOCUMENT_PARSE_REQUESTED,
+                tenant_id=user_ctx.tenant_id,
+                workspace_id=document.workspace_id,
+                correlation_id=str(ingestion_job.id),
+                idempotency_key=f"ingestion-parse:{ingestion_job.id}",
+                payload=payload.model_dump(mode="json"),
+            )
+            kafka_publisher = create_kafka_event_publisher(
+                client_id="document-api",
+            )
+            kafka_publisher(INGESTION_PARSE, envelope)
+            logger.info(
+                f"[DocumentAPI] Published ingestion job {ingestion_job.id} "
+                f"topic={INGESTION_PARSE}"
+            )
+        except Exception as e:
+            logger.exception(
+                f"[DocumentAPI] Failed to publish ingestion job {ingestion_job.id} "
+                f"topic={INGESTION_PARSE}: {e}"
+            )
+        finally:
+            if kafka_publisher is not None:
+                kafka_publisher.close()
+
     return DocumentUploadResponse(
         document=DocumentRead.model_validate(document),
         ingestion_job_id=ingestion_job.id,

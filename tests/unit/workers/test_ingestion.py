@@ -19,7 +19,7 @@ from agentic_rag.shared.db.crud.ingestion import (
 )
 from agentic_rag.shared.db.models import Document, DocumentChunk, IngestionJob, Tenant
 from agentic_rag.shared.kafka.events import EventEnvelope, EventType
-from agentic_rag.shared.kafka.topics import DLQ_INGESTION, RETRY_INGESTION
+from agentic_rag.shared.kafka.topics import DLQ_INGESTION, INGESTION_PARSE, RETRY_INGESTION
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
@@ -28,6 +28,7 @@ from agentic_rag.shared.schemas.documents import (
 )
 from agentic_rag.workers.ingestion import (
     decode_text_document,
+    handle_ingestion_parse_event,
     handle_ingestion_retry_event,
     process_ingestion_job,
     run_ingestion_worker_once,
@@ -365,6 +366,84 @@ def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
     assert envelope.payload["terminal_reason"] == "max_retries_exhausted"
 
 
+def test_handle_ingestion_parse_event_claims_and_processes_queued_job(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, job = create_job(db)
+    processed_jobs = []
+    event_publisher = FakeEventPublisher()
+
+    class ExistingSessionContext:
+        def __enter__(self):
+            return db
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def get_session_factory():
+        return ExistingSessionContext
+
+    def process_spy(
+        db: Session,
+        job: IngestionJob,
+        object_store=None,
+        event_publisher=None,
+    ) -> IngestionJob:
+        processed_jobs.append((job.id, event_publisher))
+        return job
+
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "get_sync_session_factory",
+        get_session_factory,
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module,
+        "process_ingestion_job",
+        process_spy,
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.DOCUMENT_PARSE_REQUESTED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id=str(job.id),
+        payload={
+            "job_id": str(job.id),
+            "document_id": str(job.document_id),
+            "object_key": job.object_key,
+            "mime_type": "text/markdown",
+            "source_type": "upload",
+        },
+    )
+
+    processed = handle_ingestion_parse_event(
+        envelope=envelope,
+        event_publisher=event_publisher,
+    )
+    stored_job = db.get(IngestionJob, job.id)
+
+    assert processed is True
+    assert processed_jobs == [(job.id, event_publisher)]
+    assert stored_job.status == "running"
+    assert stored_job.locked_by == "ingestion-worker"
+    assert stored_job.next_retry_at is None
+
+
+def test_handle_ingestion_parse_event_skips_invalid_payload() -> None:
+    envelope = EventEnvelope(
+        event_type=EventType.DOCUMENT_PARSE_REQUESTED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="request-1",
+        payload={"job_id": str(uuid4())},
+    )
+
+    processed = handle_ingestion_parse_event(envelope)
+
+    assert processed is False
+
+
 def test_handle_ingestion_retry_event_claims_and_processes_retry_job(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -606,7 +685,7 @@ def test_ingestion_worker_loop_uses_configured_kafka_publisher(
     assert runtime_publisher.closed is True
 
 
-def test_ingestion_worker_loop_uses_configured_retry_consumer(
+def test_ingestion_worker_loop_uses_configured_ingestion_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created_consumers = []
@@ -636,8 +715,8 @@ def test_ingestion_worker_loop_uses_configured_retry_consumer(
     )
     monkeypatch.setattr(
         ingestion_worker_module.settings,
-        "kafka_ingestion_retry_consumer_group",
-        "agentic-rag-ingestion-retry-test",
+        "kafka_ingestion_consumer_group",
+        "agentic-rag-ingestion-test",
     )
 
     def create_consumer_spy(**kwargs):
@@ -657,9 +736,9 @@ def test_ingestion_worker_loop_uses_configured_retry_consumer(
 
     ingestion_worker_module.run_ingestion_worker_loop()
 
-    assert created_consumers[0]["topics"] == [RETRY_INGESTION]
-    assert created_consumers[0]["group_id"] == "agentic-rag-ingestion-retry-test"
-    assert created_consumers[0]["client_id"] == "ingestion-worker-retry"
+    assert created_consumers[0]["topics"] == [INGESTION_PARSE, RETRY_INGESTION]
+    assert created_consumers[0]["group_id"] == "agentic-rag-ingestion-test"
+    assert created_consumers[0]["client_id"] == "ingestion-worker-consumer"
     assert callable(created_consumers[0]["handler"])
     assert runtime_consumer.ran is True
     assert runtime_consumer.closed is True

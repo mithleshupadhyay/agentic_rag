@@ -10,6 +10,7 @@ from agentic_rag.shared.kafka.events import (
     EventType,
     IngestionDLQPayload,
     IngestionRetryPayload,
+    ParseDocumentPayload,
 )
 from agentic_rag.shared.kafka.topics import (
     ALL_TOPICS,
@@ -244,6 +245,29 @@ def test_kafka_event_envelope_and_payload() -> None:
 
     assert envelope.event_version == 1
     assert envelope.payload["embedding_model"] == "gemini/gemini-embedding-001"
+
+
+def test_kafka_document_parse_event_payload() -> None:
+    payload = ParseDocumentPayload(
+        job_id=uuid4(),
+        document_id=uuid4(),
+        object_key="tenants/tenant-a/workspaces/workspace-a/documents/doc-1/raw/policy.md",
+        mime_type="text/markdown",
+        source_type="upload",
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.DOCUMENT_PARSE_REQUESTED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id=str(payload.job_id),
+        payload=payload.model_dump(mode="json"),
+    )
+
+    assert envelope.payload["job_id"] == str(payload.job_id)
+    assert envelope.payload["document_id"] == str(payload.document_id)
+    assert envelope.payload["object_key"].endswith("/policy.md")
+    assert envelope.payload["mime_type"] == "text/markdown"
+    assert envelope.payload["source_type"] == "upload"
 
 
 def test_kafka_ingestion_retry_event_payload() -> None:

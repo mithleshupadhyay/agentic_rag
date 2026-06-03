@@ -127,21 +127,33 @@ def claim_ingestion_job_by_id(
     next_retry_at = job.next_retry_at
     if next_retry_at is not None and next_retry_at.tzinfo is None:
         next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
-    if job.status != "failed":
+    lease_expires_at = job.lease_expires_at
+    if lease_expires_at is not None and lease_expires_at.tzinfo is None:
+        lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
+
+    if job.status == "failed":
+        if job.retry_count >= job.max_retries:
+            logger.warning(
+                f"[DB] Ingestion job {job.id} exhausted retries "
+                f"retry_count={job.retry_count} max_retries={job.max_retries}"
+            )
+            return None
+        if next_retry_at is not None and next_retry_at > now:
+            logger.info(
+                f"[DB] Ingestion job {job.id} is not ready for retry "
+                f"next_retry_at={job.next_retry_at}"
+            )
+            return None
+    elif job.status == "running":
+        if lease_expires_at is None or lease_expires_at > now:
+            logger.warning(
+                f"[DB] Ingestion job {job.id} is already running "
+                f"lease_expires_at={job.lease_expires_at}"
+            )
+            return None
+    elif job.status != "queued":
         logger.warning(
-            f"[DB] Ingestion job {job.id} is not retryable status={job.status}"
-        )
-        return None
-    if job.retry_count >= job.max_retries:
-        logger.warning(
-            f"[DB] Ingestion job {job.id} exhausted retries "
-            f"retry_count={job.retry_count} max_retries={job.max_retries}"
-        )
-        return None
-    if next_retry_at is not None and next_retry_at > now:
-        logger.info(
-            f"[DB] Ingestion job {job.id} is not ready for retry "
-            f"next_retry_at={job.next_retry_at}"
+            f"[DB] Ingestion job {job.id} is not claimable status={job.status}"
         )
         return None
 
