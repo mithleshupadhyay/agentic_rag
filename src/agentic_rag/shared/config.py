@@ -74,6 +74,10 @@ class Settings(BaseSettings):
         default="agentic-rag-ingestion",
         validation_alias="KAFKA_INGESTION_CONSUMER_GROUP",
     )
+    kafka_embedding_consumer_group: str = Field(
+        default="agentic-rag-embedding",
+        validation_alias="KAFKA_EMBEDDING_CONSUMER_GROUP",
+    )
     s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
     s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")
     s3_secret_access_key: str = Field(

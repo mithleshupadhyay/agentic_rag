@@ -2,8 +2,11 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from typing import Optional
+from functools import partial
+from typing import Optional, cast
+from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from agentic_rag.llm.gateway import generate_embeddings
@@ -14,6 +17,9 @@ from agentic_rag.shared.db.crud.embeddings import (
 )
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.db.session import get_sync_session_factory
+from agentic_rag.shared.kafka.consumer import create_kafka_event_consumer
+from agentic_rag.shared.kafka.events import EmbedChunksPayload, EventEnvelope, EventType
+from agentic_rag.shared.kafka.topics import INGESTION_EMBED
 from agentic_rag.shared.schemas.auth import AuthContext, TokenType
 from agentic_rag.shared.schemas.chunks import ChunkEmbeddingCreate
 from agentic_rag.shared.schemas.llm import EmbeddingRequest, EmbeddingResponse
@@ -25,13 +31,22 @@ logger = logging.getLogger(__name__)
 EmbeddingClient = Callable[[EmbeddingRequest], EmbeddingResponse]
 
 
+EMBEDDING_WORKER_ID = "embedding-worker"
+EMBEDDING_CONSUMER_ID = "embedding-worker-consumer"
+
+
 def process_embedding_batch(
     db: Session,
     tenant_id: str,
     embedding_client: Optional[EmbeddingClient] = None,
     limit: Optional[int] = None,
+    document_id: Optional[UUID] = None,
+    chunk_ids: Optional[list[UUID]] = None,
 ) -> int:
-    logger.info(f"[EmbeddingWorker] Processing embedding batch tenant={tenant_id}")
+    logger.info(
+        f"[EmbeddingWorker] Processing embedding batch tenant={tenant_id} "
+        f"document={document_id} chunk_count={len(chunk_ids or [])}"
+    )
     embedding_client = embedding_client or generate_embeddings
     batch_limit = limit or settings.embedding_batch_size
 
@@ -41,6 +56,8 @@ def process_embedding_batch(
         embedding_model=settings.embedding_model_name,
         vector_version=settings.embedding_vector_version,
         limit=batch_limit,
+        document_id=document_id,
+        chunk_ids=chunk_ids,
     )
     if not chunks:
         logger.info(f"[EmbeddingWorker] No chunks pending embedding tenant={tenant_id}")
@@ -60,7 +77,7 @@ def process_embedding_batch(
                 provider=settings.embedding_provider,
                 timeout_seconds=settings.embedding_timeout_seconds,
                 metadata={
-                    "source": "embedding-worker",
+                    "source": EMBEDDING_WORKER_ID,
                     "chunk_count": len(chunks),
                 },
             )
@@ -171,20 +188,101 @@ def run_embedding_worker_once(
         return written_count > 0
 
 
-def run_embedding_worker_loop(tenant_id: Optional[str] = None) -> None:
-    logger.info("[EmbeddingWorker] Worker loop started")
+def handle_embedding_event(
+    envelope: EventEnvelope,
+    embedding_client: Optional[EmbeddingClient] = None,
+) -> bool:
+    if envelope.event_type != EventType.DOCUMENT_EMBED_REQUESTED:
+        logger.warning(
+            f"[EmbeddingWorker] Skipping non-embedding event "
+            f"event_type={envelope.event_type} event_id={envelope.event_id}"
+        )
+        return False
 
-    while True:
-        try:
-            processed = run_embedding_worker_once(tenant_id=tenant_id)
-            if not processed:
+    try:
+        payload = EmbedChunksPayload.model_validate(envelope.payload)
+    except ValidationError as e:
+        logger.warning(
+            f"[EmbeddingWorker] Skipping invalid embedding payload "
+            f"event_id={envelope.event_id}: {e}"
+        )
+        return False
+
+    if payload.embedding_model != settings.embedding_model_name:
+        logger.warning(
+            f"[EmbeddingWorker] Skipping embedding event for unexpected model "
+            f"event_id={envelope.event_id} model={payload.embedding_model}"
+        )
+        return False
+    if payload.vector_version != settings.embedding_vector_version:
+        logger.warning(
+            f"[EmbeddingWorker] Skipping embedding event for unexpected vector version "
+            f"event_id={envelope.event_id} vector_version={payload.vector_version}"
+        )
+        return False
+
+    SessionLocal = get_sync_session_factory()
+    with SessionLocal() as db:
+        written_count = process_embedding_batch(
+            db=db,
+            tenant_id=envelope.tenant_id,
+            embedding_client=embedding_client,
+            limit=len(payload.chunk_ids),
+            document_id=payload.document_id,
+            chunk_ids=payload.chunk_ids,
+        )
+        logger.info(
+            f"[EmbeddingWorker] Handled embedding event event_id={envelope.event_id} "
+            f"written_count={written_count}"
+        )
+        return True
+
+
+def run_embedding_worker_loop(
+    tenant_id: Optional[str] = None,
+    embedding_client: Optional[EmbeddingClient] = None,
+) -> None:
+    logger.info("[EmbeddingWorker] Worker loop started")
+    embedding_consumer = None
+
+    try:
+        if settings.kafka_consuming_enabled:
+            logger.info("[EmbeddingWorker] Kafka embedding consumer enabled")
+            embedding_consumer = create_kafka_event_consumer(
+                topics=[INGESTION_EMBED],
+                group_id=settings.kafka_embedding_consumer_group,
+                handler=cast(
+                    Callable[[EventEnvelope], None],
+                    partial(
+                        handle_embedding_event,
+                        embedding_client=embedding_client,
+                    ),
+                ),
+                client_id=EMBEDDING_CONSUMER_ID,
+            )
+            try:
+                embedding_consumer.run_forever()
+            except KeyboardInterrupt:
+                logger.info("[EmbeddingWorker] Kafka embedding consumer stopped")
+            return
+
+        while True:
+            try:
+                processed = run_embedding_worker_once(
+                    tenant_id=tenant_id,
+                    embedding_client=embedding_client,
+                )
+                if not processed:
+                    time.sleep(settings.embedding_worker_poll_seconds)
+            except KeyboardInterrupt:
+                logger.info("[EmbeddingWorker] Worker loop stopped")
+                break
+            except Exception as e:
+                logger.exception(f"[EmbeddingWorker] Worker loop error: {e}")
                 time.sleep(settings.embedding_worker_poll_seconds)
-        except KeyboardInterrupt:
-            logger.info("[EmbeddingWorker] Worker loop stopped")
-            break
-        except Exception as e:
-            logger.exception(f"[EmbeddingWorker] Worker loop error: {e}")
-            time.sleep(settings.embedding_worker_poll_seconds)
+    finally:
+        if embedding_consumer is not None:
+            embedding_consumer.close()
 
 
 if __name__ == "__main__":

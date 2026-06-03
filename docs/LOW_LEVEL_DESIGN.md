@@ -1178,14 +1178,20 @@ to `retry.ingestion` when `next_retry_at` is set, or an `IngestionDLQPayload` to
 intentionally separate from this contract so unit tests can use a fake
 publisher.
 
+After parsing and chunk replacement succeeds, the ingestion worker emits a
+`DOCUMENT_EMBED_REQUESTED` envelope with `EmbedChunksPayload` to
+`ingestion.embed` when an event publisher is configured. If the embed publish
+fails, ingestion still completes because the embedding worker can discover the
+same missing chunks through its DB polling path.
+
 `KafkaEventPublisher` serializes the validated `EventEnvelope` with
 `model_dump_json()`, uses `idempotency_key` as the Kafka message key when one is
 provided, falls back to `event_id` otherwise, and delegates delivery to an
 injected send-compatible producer client. The document API creates a
 `kafka-python` producer only around the upload scheduling publish. The ingestion
 worker creates a producer at startup only when `KAFKA_PUBLISHING_ENABLED` is
-true and then passes the publisher into the existing failure-event hook. DB job
-polling remains the default local scheduling mechanism.
+true and then passes the publisher into the existing success and failure event
+hooks. DB job polling remains the default local scheduling mechanism.
 `KafkaEventConsumer` mirrors the producer shape for the consume side: it accepts
 an injected consumer client and handler callable, validates raw message values
 into `EventEnvelope`, commits offsets after handler success, and commits invalid
@@ -1199,6 +1205,12 @@ queued job through the existing tenant-scoped DB lease path, and only then calls
 the existing ingestion job processor. The retry handler validates
 `IngestionRetryPayload`, claims the referenced retryable job through the same
 tenant-scoped DB lease path, and then calls the processor.
+The embedding worker can subscribe to `ingestion.embed` with
+`KAFKA_EMBEDDING_CONSUMER_GROUP`. The embedding handler validates
+`EmbedChunksPayload`, checks that the requested model and vector version match
+the worker configuration, and then embeds only chunks matching the envelope
+tenant, payload document ID, and payload chunk IDs. DB polling remains the
+default local embedding scheduling path when Kafka consuming is disabled.
 The local Docker stack includes a single-node Kafka broker and a one-shot topic
 provisioning service that runs `scripts/kafka-topic.sh` for ingestion, retry,
 DLQ, long-query, and evaluation topics. `make docker-smoke-kafka-producer` runs

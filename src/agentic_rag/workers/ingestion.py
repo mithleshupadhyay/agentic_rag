@@ -27,6 +27,7 @@ from agentic_rag.shared.db.crud.ingestion import (
 from agentic_rag.shared.db.models import Document, IngestionJob
 from agentic_rag.shared.db.session import get_sync_session_factory
 from agentic_rag.shared.kafka.events import (
+    EmbedChunksPayload,
     EventEnvelope,
     EventType,
     IngestionDLQPayload,
@@ -252,7 +253,35 @@ def process_ingestion_job(
             }
             for chunk in chunks
         ]
-        replace_document_chunks(db, document, chunk_payloads)
+        stored_chunks = replace_document_chunks(db, document, chunk_payloads)
+
+        if event_publisher:
+            embed_payload = EmbedChunksPayload(
+                job_id=job.id,
+                document_id=document.id,
+                chunk_ids=[chunk.id for chunk in stored_chunks],
+                embedding_model=settings.embedding_model_name,
+                vector_version=settings.embedding_vector_version,
+            )
+            embed_envelope = EventEnvelope(
+                event_type=EventType.DOCUMENT_EMBED_REQUESTED,
+                tenant_id=job.tenant_id,
+                workspace_id=job.workspace_id,
+                correlation_id=str(job.id),
+                idempotency_key=f"ingestion-embed:{job.id}",
+                payload=embed_payload.model_dump(mode="json"),
+            )
+            try:
+                event_publisher(INGESTION_EMBED, embed_envelope)
+                logger.info(
+                    f"[IngestionWorker] Published embedding event job={job.id} "
+                    f"topic={INGESTION_EMBED} chunks={len(stored_chunks)}"
+                )
+            except Exception as publish_error:
+                logger.exception(
+                    f"[IngestionWorker] Failed to publish embedding event "
+                    f"job={job.id} topic={INGESTION_EMBED}: {publish_error}"
+                )
 
         job = mark_ingestion_job_completed(db, job)
         logger.info(
@@ -295,13 +324,13 @@ def process_ingestion_job(
             event_type = EventType.INGESTION_DLQ_RECORDED
             topic = TOPIC_TO_DLQ_TOPIC.get(source_topic, DLQ_INGESTION)
             idempotency_key = f"ingestion-dlq:{job.id}:{job.retry_count}"
-            payload: IngestionRetryPayload | IngestionDLQPayload
+            failure_payload: IngestionRetryPayload | IngestionDLQPayload
             if job.next_retry_at is not None:
                 retry_topic = TOPIC_TO_RETRY_TOPIC.get(source_topic, RETRY_INGESTION)
                 retry_delay_seconds = int(
                     (job.next_retry_at - failed_at).total_seconds()
                 )
-                payload = IngestionRetryPayload(
+                failure_payload = IngestionRetryPayload(
                     job_id=job.id,
                     document_id=job.document_id,
                     failed_stage=job.current_stage,
@@ -322,7 +351,7 @@ def process_ingestion_job(
                 topic = retry_topic
                 idempotency_key = f"ingestion-retry:{job.id}:{job.retry_count}"
             else:
-                payload = IngestionDLQPayload(
+                failure_payload = IngestionDLQPayload(
                     job_id=job.id,
                     document_id=job.document_id,
                     failed_stage=job.current_stage,
@@ -343,7 +372,7 @@ def process_ingestion_job(
                 workspace_id=job.workspace_id,
                 correlation_id=str(job.id),
                 idempotency_key=idempotency_key,
-                payload=payload.model_dump(mode="json"),
+                payload=failure_payload.model_dump(mode="json"),
             )
             try:
                 event_publisher(topic, envelope)

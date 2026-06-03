@@ -311,11 +311,13 @@ def get_chunks_missing_embedding(
     vector_version: int = 1,
     limit: int = 100,
     document_id: Optional[UUID] = None,
+    chunk_ids: Optional[list[UUID]] = None,
 ) -> list[DocumentChunk]:
     logger.info(
         f"[DB] Listing chunks missing embedding tenant={tenant_id} "
         f"model={embedding_model} vector_version={vector_version} "
-        f"limit={limit} document_id={document_id}"
+        f"limit={limit} document_id={document_id} "
+        f"chunk_count={len(chunk_ids or [])}"
     )
     query = (
         db.query(DocumentChunk)
@@ -338,10 +340,12 @@ def get_chunks_missing_embedding(
             ChunkEmbedding.id.is_(None),
         )
         .order_by(DocumentChunk.updated_at.asc(), DocumentChunk.created_at.asc())
-        .limit(limit)
     )
     if document_id:
         query = query.filter(DocumentChunk.document_id == document_id)
+    if chunk_ids:
+        query = query.filter(DocumentChunk.id.in_(chunk_ids))
+    query = query.limit(limit)
 
     bind = db.get_bind()
     dialect_name = bind.dialect.name if bind else ""

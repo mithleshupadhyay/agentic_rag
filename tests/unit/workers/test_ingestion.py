@@ -19,7 +19,12 @@ from agentic_rag.shared.db.crud.ingestion import (
 )
 from agentic_rag.shared.db.models import Document, DocumentChunk, IngestionJob, Tenant
 from agentic_rag.shared.kafka.events import EventEnvelope, EventType
-from agentic_rag.shared.kafka.topics import DLQ_INGESTION, INGESTION_PARSE, RETRY_INGESTION
+from agentic_rag.shared.kafka.topics import (
+    DLQ_INGESTION,
+    INGESTION_EMBED,
+    INGESTION_PARSE,
+    RETRY_INGESTION,
+)
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
@@ -182,6 +187,54 @@ def test_process_ingestion_job_reads_object_and_stores_chunks(db: Session) -> No
     assert stored_chunks[0].content.startswith("# Security Policy")
     assert stored_chunks[0].acl.allowed_user_ids == ["user-1"]
     assert object_store.read_keys == [document.object_key]
+
+
+def test_process_ingestion_job_publishes_embedding_event(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document, job = create_job(db)
+    event_publisher = FakeEventPublisher()
+    object_store = FakeObjectStore(
+        b"# Security Policy\n\nOnly authorized users can read this policy."
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "embedding_model_name",
+        "text-embedding-test",
+    )
+    monkeypatch.setattr(
+        ingestion_worker_module.settings,
+        "embedding_vector_version",
+        2,
+    )
+
+    process_ingestion_job(
+        db=db,
+        job=job,
+        object_store=object_store,
+        event_publisher=event_publisher,
+    )
+    stored_chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document.id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .all()
+    )
+
+    assert len(event_publisher.published) == 1
+    topic, envelope = event_publisher.published[0]
+    assert topic == INGESTION_EMBED
+    assert envelope.event_type == EventType.DOCUMENT_EMBED_REQUESTED
+    assert envelope.tenant_id == "tenant-a"
+    assert envelope.workspace_id == "workspace-a"
+    assert envelope.correlation_id == str(job.id)
+    assert envelope.idempotency_key == f"ingestion-embed:{job.id}"
+    assert envelope.payload["job_id"] == str(job.id)
+    assert envelope.payload["document_id"] == str(document.id)
+    assert envelope.payload["chunk_ids"] == [str(chunk.id) for chunk in stored_chunks]
+    assert envelope.payload["embedding_model"] == "text-embedding-test"
+    assert envelope.payload["vector_version"] == 2
 
 
 def test_run_ingestion_worker_once_claims_and_processes_job(

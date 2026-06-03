@@ -4,15 +4,19 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import agentic_rag.workers.embedding as embedding_worker_module
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import create_document
 from agentic_rag.shared.db.crud.ingestion import replace_document_chunks
 from agentic_rag.shared.db.models import ChunkEmbedding, DocumentChunk, Tenant
+from agentic_rag.shared.kafka.events import EventEnvelope, EventType
+from agentic_rag.shared.kafka.topics import INGESTION_EMBED
 from agentic_rag.shared.schemas.auth import AclPolicy, Visibility
 from agentic_rag.shared.schemas.documents import DocumentCreateRequest, DocumentSourceType
 from agentic_rag.shared.schemas.llm import EmbeddingRequest, EmbeddingResponse
 from agentic_rag.workers.embedding import (
+    handle_embedding_event,
     process_embedding_batch,
     process_embedding_batches,
 )
@@ -143,6 +147,78 @@ def test_process_embedding_batch_writes_missing_embedding(
     assert stored_embedding.metadata_["source"] == "embedding-worker"
 
 
+def test_process_embedding_batch_filters_event_chunk_ids(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_chunk = add_ready_chunk(
+        db,
+        content="Initial chunk content.",
+        content_hash="hash-initial",
+    )
+    document = initial_chunk.document
+    db.delete(initial_chunk)
+    db.commit()
+    db.refresh(document)
+    first_chunk, second_chunk = replace_document_chunks(
+        db=db,
+        document=document,
+        chunks=[
+            {
+                "chunk_index": 0,
+                "content": "First chunk content.",
+                "content_hash": "hash-1",
+                "token_count": 3,
+                "metadata": {},
+            },
+            {
+                "chunk_index": 1,
+                "content": "Second chunk content.",
+                "content_hash": "hash-2",
+                "token_count": 3,
+                "metadata": {},
+            },
+        ],
+    )
+    embedding_client = FakeEmbeddingClient()
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_model_name",
+        "text-embedding-test",
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_provider",
+        "litellm",
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_dimension",
+        768,
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_vector_version",
+        1,
+    )
+
+    written_count = process_embedding_batch(
+        db=db,
+        tenant_id="tenant-a",
+        embedding_client=embedding_client,
+        limit=10,
+        document_id=first_chunk.document_id,
+        chunk_ids=[first_chunk.id],
+    )
+    stored_embeddings = db.scalars(select(ChunkEmbedding)).all()
+
+    assert written_count == 1
+    assert embedding_client.requests[0].texts == [first_chunk.content]
+    assert len(stored_embeddings) == 1
+    assert stored_embeddings[0].chunk_id == first_chunk.id
+    assert stored_embeddings[0].chunk_id != second_chunk.id
+
+
 def test_process_embedding_batch_reembeds_stale_chunk_hash(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -239,3 +315,140 @@ def test_process_embedding_batch_keeps_chunks_pending_on_provider_failure(
 
     assert written_count == 0
     assert stored_embeddings == []
+
+
+def test_handle_embedding_event_processes_scoped_chunks(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = add_ready_chunk(db)
+    embedding_client = FakeEmbeddingClient()
+
+    class ExistingSessionContext:
+        def __enter__(self):
+            return db
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def get_session_factory():
+        return ExistingSessionContext
+
+    monkeypatch.setattr(
+        embedding_worker_module,
+        "get_sync_session_factory",
+        get_session_factory,
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_model_name",
+        "text-embedding-test",
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_provider",
+        "litellm",
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_dimension",
+        768,
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "embedding_vector_version",
+        1,
+    )
+    envelope = EventEnvelope(
+        event_type=EventType.DOCUMENT_EMBED_REQUESTED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="job-1",
+        payload={
+            "job_id": str(chunk.document_id),
+            "document_id": str(chunk.document_id),
+            "chunk_ids": [str(chunk.id)],
+            "embedding_model": "text-embedding-test",
+            "vector_version": 1,
+        },
+    )
+
+    handled = handle_embedding_event(
+        envelope=envelope,
+        embedding_client=embedding_client,
+    )
+    stored_embedding = db.scalars(select(ChunkEmbedding)).one()
+
+    assert handled is True
+    assert stored_embedding.tenant_id == "tenant-a"
+    assert stored_embedding.document_id == chunk.document_id
+    assert stored_embedding.chunk_id == chunk.id
+    assert embedding_client.requests[0].auth.tenant_id == "tenant-a"
+
+
+def test_handle_embedding_event_skips_invalid_payload() -> None:
+    envelope = EventEnvelope(
+        event_type=EventType.DOCUMENT_EMBED_REQUESTED,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        correlation_id="job-1",
+        payload={"document_id": "not-a-uuid"},
+    )
+
+    handled = handle_embedding_event(envelope)
+
+    assert handled is False
+
+
+def test_embedding_worker_loop_uses_configured_embedding_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_consumers = []
+
+    class RuntimeConsumer:
+        def __init__(self) -> None:
+            self.closed = False
+            self.ran = False
+
+        def run_forever(self) -> None:
+            self.ran = True
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    runtime_consumer = RuntimeConsumer()
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "kafka_consuming_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        embedding_worker_module.settings,
+        "kafka_embedding_consumer_group",
+        "agentic-rag-embedding-test",
+    )
+
+    def create_consumer_spy(**kwargs):
+        created_consumers.append(kwargs)
+        return runtime_consumer
+
+    monkeypatch.setattr(
+        embedding_worker_module,
+        "create_kafka_event_consumer",
+        create_consumer_spy,
+    )
+    monkeypatch.setattr(
+        embedding_worker_module,
+        "run_embedding_worker_once",
+        lambda **kwargs: pytest.fail("DB polling should not run in consume mode"),
+    )
+
+    embedding_worker_module.run_embedding_worker_loop()
+
+    assert created_consumers[0]["topics"] == [INGESTION_EMBED]
+    assert created_consumers[0]["group_id"] == "agentic-rag-embedding-test"
+    assert created_consumers[0]["client_id"] == "embedding-worker-consumer"
+    assert callable(created_consumers[0]["handler"])
+    assert runtime_consumer.ran is True
+    assert runtime_consumer.closed is True

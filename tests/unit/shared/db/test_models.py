@@ -35,6 +35,7 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
         KAFKA_CLIENT_ID="worker-a",
         KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS=2.5,
         KAFKA_INGESTION_CONSUMER_GROUP="ingestion-group-a",
+        KAFKA_EMBEDDING_CONSUMER_GROUP="embedding-group-a",
     )
 
     assert settings.kafka_publishing_enabled is True
@@ -43,6 +44,7 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
     assert settings.kafka_client_id == "worker-a"
     assert settings.kafka_producer_flush_timeout_seconds == 2.5
     assert settings.kafka_ingestion_consumer_group == "ingestion-group-a"
+    assert settings.kafka_embedding_consumer_group == "embedding-group-a"
 
 
 def test_redis_and_llm_circuit_breaker_settings() -> None:
