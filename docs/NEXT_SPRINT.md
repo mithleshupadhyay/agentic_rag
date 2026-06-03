@@ -30,7 +30,7 @@ retrieval quality, and production operations.
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add more focused Docker smoke scripts for OpenSearch, pgvector retrieval, and full upload-to-query flow. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
-| `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle and latency metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, provider health, and worker queues as those slices land. | High |
+| `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle, query latency, and LLM provider circuit-breaker health metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, and worker queues as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, and optional Kafka `ingestion.parse` scheduling. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
@@ -58,7 +58,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/kafka/consumer.py` | Fakeable Kafka event consumer adapter that validates `EventEnvelope` messages, commits valid messages after handler success, and skips invalid poison messages after logging validation failures. | Add delivery metrics, retry policy hooks, and broader local Kafka integration coverage. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
-| `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, and memory fallback if Redis is unavailable. | Add provider health snapshots and expose safe operational metrics. | High |
+| `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, and safe fallback state. | Wire the guardrail skeleton into LangGraph orchestration, persisted agent runs/steps/checkpoints, retrieval tools, LLM gateway calls, cancellation, and streaming events when the query flow is ready for the next agent slice. | High |
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
@@ -114,6 +114,7 @@ retrieval quality, and production operations.
 | 2026-06-03 | Added Kafka-backed BM25 indexing scheduling from ingestion chunk creation to the indexing worker consume path. |
 | 2026-06-03 | Added Kafka-backed embedding scheduling from ingestion chunk creation to the embedding worker consume path. |
 | 2026-06-03 | Added Kafka-backed ingestion parse scheduling from document upload to the ingestion worker consume path. |
+| 2026-06-03 | Added safe LLM provider health snapshots and low-cardinality circuit-breaker Prometheus metrics. |
 | 2026-06-03 | Normalized Docker Compose service environment variables to explicit, readable names and removed stale Docker-only template variables. |
 | 2026-06-03 | Split the old shared app Dockerfile into API, worker, and database job Dockerfiles and updated Compose build wiring. |
 | 2026-06-03 | Wired local Prometheus and Grafana provisioning into Docker Compose for query metrics, dashboard loading, and alert rule loading. |
@@ -127,8 +128,8 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add provider health snapshots and safe circuit-breaker metrics. |
-| 2 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |
-| 3 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 1 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |
+| 2 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 3 | Add LLM provider health dashboard panels and alert rules from the new circuit-breaker metrics. |
 | 4 | Add local monitoring smoke checks for Prometheus target health and Grafana dashboard provisioning. |
 | 5 | Add Docker Compose profiles for lightweight API-only and full ingestion stacks. |

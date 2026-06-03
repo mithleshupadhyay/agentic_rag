@@ -715,10 +715,23 @@ agentic_rag_query_lifecycle_total
 agentic_rag_query_latency_seconds
 - Labels: status, retrieval_strategy, synthesis_enabled
 - Observed for completed and failed query execution paths
+
+agentic_rag_llm_provider_circuit_state
+- Labels: provider, model, state
+- State values: closed, open, half_open
+
+agentic_rag_llm_provider_failure_count
+- Labels: provider, model
+- Tracks consecutive provider/model failures held by the circuit breaker
+
+agentic_rag_llm_provider_retry_after_seconds
+- Labels: provider, model
+- Tracks remaining retry delay while a provider/model circuit is open
 ```
 
-The query metrics intentionally exclude tenant IDs, user IDs, workspace IDs,
-request IDs, agent run IDs, raw query text, and document identifiers to avoid
+The query and LLM provider metrics intentionally exclude tenant IDs, user IDs,
+workspace IDs, request IDs, agent run IDs, raw query text, prompts, document
+identifiers, chunk identifiers, and provider credentials to avoid
 high-cardinality metrics and sensitive data exposure.
 
 The first dashboard and alert artifacts are:
@@ -990,6 +1003,16 @@ default for simple local runs. Production and multi-replica deployments can set
 half-open, and reset state through Redis. If Redis is temporarily unavailable,
 the gateway logs the storage failure and falls back to the in-process memory
 state instead of dropping circuit-breaker protection.
+
+The circuit breaker exposes a safe provider health snapshot for each checked
+provider/model pair. The snapshot contains only operational fields:
+`provider`, `model`, `state`, `failure_count`, `retry_after_seconds`,
+`opened_until`, `half_open`, `last_error_type`, `last_failure_at`, and
+`checked_at`. It does not include tenant IDs, user IDs, request IDs, raw prompts,
+documents, chunks, provider credentials, or full exception messages. The same
+state updates low-cardinality Prometheus gauges for circuit state, consecutive
+failure count, and retry-after seconds through
+`src/agentic_rag/monitoring/metrics.py`.
 
 Configuration:
 

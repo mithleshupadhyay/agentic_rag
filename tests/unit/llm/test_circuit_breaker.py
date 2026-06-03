@@ -5,6 +5,11 @@ from agentic_rag.llm.circuit_breaker import (
     LLMCircuitBreakerOpenError,
     llm_circuit_breaker,
 )
+from agentic_rag.monitoring.metrics import (
+    LLM_PROVIDER_CIRCUIT_STATE,
+    LLM_PROVIDER_FAILURE_COUNT,
+    LLM_PROVIDER_RETRY_AFTER_SECONDS,
+)
 
 
 class FakeRedis:
@@ -56,6 +61,171 @@ def clear_state(monkeypatch):
     llm_circuit_breaker.clear()
     yield
     llm_circuit_breaker.clear()
+
+
+def test_memory_circuit_breaker_snapshot_defaults_to_closed(monkeypatch) -> None:
+    monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
+
+    snapshot = llm_circuit_breaker.get_snapshot(
+        provider="snapshot-provider",
+        model="snapshot-model",
+    )
+
+    assert snapshot.provider == "snapshot-provider"
+    assert snapshot.model == "snapshot-model"
+    assert snapshot.state == "closed"
+    assert snapshot.failure_count == 0
+    assert snapshot.retry_after_seconds == 0
+    assert snapshot.opened_until == 0.0
+    assert snapshot.half_open is False
+    assert snapshot.last_error_type is None
+    assert snapshot.last_failure_at is None
+    assert snapshot.checked_at == 1000.0
+
+
+def test_memory_circuit_breaker_records_provider_health_metrics(monkeypatch) -> None:
+    provider = "metric-provider"
+    model = "metric-model"
+    current_time = [1000.0]
+    monkeypatch.setattr(
+        "agentic_rag.llm.circuit_breaker.time.time",
+        lambda: current_time[0],
+    )
+
+    llm_circuit_breaker.record_failure(
+        provider=provider,
+        model=model,
+        error=RuntimeError("first failure"),
+        failure_threshold=2,
+        cooldown_seconds=60,
+    )
+
+    snapshot = llm_circuit_breaker.get_snapshot(provider, model)
+
+    assert snapshot.state == "closed"
+    assert snapshot.failure_count == 1
+    assert snapshot.retry_after_seconds == 0
+    assert snapshot.last_error_type == "RuntimeError"
+    assert snapshot.last_failure_at == 1000.0
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="closed",
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="open",
+        )._value.get()
+        == 0.0
+    )
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="half_open",
+        )._value.get()
+        == 0.0
+    )
+    assert (
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider=provider,
+            model=model,
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_RETRY_AFTER_SECONDS.labels(
+            provider=provider,
+            model=model,
+        )._value.get()
+        == 0.0
+    )
+
+    llm_circuit_breaker.record_failure(
+        provider=provider,
+        model=model,
+        error=RuntimeError("second failure"),
+        failure_threshold=2,
+        cooldown_seconds=60,
+    )
+
+    snapshot = llm_circuit_breaker.get_snapshot(provider, model)
+
+    assert snapshot.state == "open"
+    assert snapshot.failure_count == 2
+    assert snapshot.retry_after_seconds == 60
+    assert snapshot.opened_until == 1060.0
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="closed",
+        )._value.get()
+        == 0.0
+    )
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="open",
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider=provider,
+            model=model,
+        )._value.get()
+        == 2.0
+    )
+    assert (
+        LLM_PROVIDER_RETRY_AFTER_SECONDS.labels(
+            provider=provider,
+            model=model,
+        )._value.get()
+        == 60.0
+    )
+
+    current_time[0] = 1061.0
+    llm_circuit_breaker.check(provider, model)
+    snapshot = llm_circuit_breaker.get_snapshot(provider, model)
+
+    assert snapshot.state == "half_open"
+    assert snapshot.retry_after_seconds == 0
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="half_open",
+        )._value.get()
+        == 1.0
+    )
+
+    llm_circuit_breaker.reset(provider, model)
+    snapshot = llm_circuit_breaker.get_snapshot(provider, model)
+
+    assert snapshot.state == "closed"
+    assert snapshot.failure_count == 0
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider=provider,
+            model=model,
+            state="closed",
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider=provider,
+            model=model,
+        )._value.get()
+        == 0.0
+    )
 
 
 def test_redis_backed_circuit_breaker_opens_and_blocks(monkeypatch) -> None:

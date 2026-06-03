@@ -3,6 +3,11 @@ from litellm import RateLimitError, ServiceUnavailableError
 
 from agentic_rag.llm.circuit_breaker import llm_circuit_breaker
 from agentic_rag.llm.gateway import generate_chat_completion, generate_embeddings
+from agentic_rag.monitoring.metrics import (
+    LLM_PROVIDER_CIRCUIT_STATE,
+    LLM_PROVIDER_FAILURE_COUNT,
+    LLM_PROVIDER_RETRY_AFTER_SECONDS,
+)
 from agentic_rag.shared.schemas.auth import AuthContext, TokenType
 from agentic_rag.shared.schemas.llm import (
     ChatCompletionRequest,
@@ -315,6 +320,28 @@ def test_generate_chat_completion_opens_circuit_after_failures(monkeypatch) -> N
     assert circuit_state
     assert circuit_state.failure_count == 2
     assert circuit_state.opened_until == 1060.0
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider="litellm",
+            model="test-model",
+            state="open",
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider="litellm",
+            model="test-model",
+        )._value.get()
+        == 2.0
+    )
+    assert (
+        LLM_PROVIDER_RETRY_AFTER_SECONDS.labels(
+            provider="litellm",
+            model="test-model",
+        )._value.get()
+        == 60.0
+    )
 
 
 def test_generate_chat_completion_fails_fast_when_circuit_open(monkeypatch) -> None:
@@ -403,6 +430,21 @@ def test_generate_chat_completion_resets_circuit_after_cooldown_success(
     assert len(calls) == 1
     assert response.text == "Grounded answer [1]."
     assert llm_circuit_breaker.get_state("litellm", "test-model") is None
+    assert (
+        LLM_PROVIDER_CIRCUIT_STATE.labels(
+            provider="litellm",
+            model="test-model",
+            state="closed",
+        )._value.get()
+        == 1.0
+    )
+    assert (
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider="litellm",
+            model="test-model",
+        )._value.get()
+        == 0.0
+    )
 
 
 def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) -> None:

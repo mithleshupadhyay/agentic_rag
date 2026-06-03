@@ -6,6 +6,11 @@ from dataclasses import asdict, dataclass
 from redis import Redis
 from redis.exceptions import RedisError
 
+from agentic_rag.monitoring.metrics import (
+    LLM_PROVIDER_CIRCUIT_STATE,
+    LLM_PROVIDER_FAILURE_COUNT,
+    LLM_PROVIDER_RETRY_AFTER_SECONDS,
+)
 from agentic_rag.shared.config import settings
 
 
@@ -19,6 +24,20 @@ class LLMCircuitBreakerState:
     half_open: bool = False
     last_error_type: str | None = None
     last_failure_at: float | None = None
+
+
+@dataclass(frozen=True)
+class LLMCircuitBreakerSnapshot:
+    provider: str
+    model: str
+    state: str
+    failure_count: int
+    retry_after_seconds: int
+    opened_until: float
+    half_open: bool
+    last_error_type: str | None
+    last_failure_at: float | None
+    checked_at: float
 
 
 class LLMCircuitBreakerOpenError(RuntimeError):
@@ -85,6 +104,7 @@ class LLMCircuitBreaker:
         current_time = time.time()
         if circuit_state.opened_until > current_time:
             retry_after_seconds = int(circuit_state.opened_until - current_time)
+            self.record_metrics(provider, model)
             logger.warning(
                 f"[LLMCircuitBreaker] Request blocked by open circuit "
                 f"provider={provider} model={model} "
@@ -125,6 +145,7 @@ class LLMCircuitBreaker:
                 f"[LLMCircuitBreaker] Circuit breaker half-open "
                 f"provider={provider} model={model}"
             )
+            self.record_metrics(provider, model)
 
     def record_failure(
         self,
@@ -214,6 +235,7 @@ class LLMCircuitBreaker:
                 redis_client.ping()
                 redis_client.set(redis_key, json.dumps(asdict(circuit_state)))
                 self._states.pop(circuit_key, None)
+                self.record_metrics(provider, model)
                 return
             except (OSError, RedisError) as e:
                 logger.warning(
@@ -223,6 +245,7 @@ class LLMCircuitBreaker:
                 )
 
         self._states[circuit_key] = circuit_state
+        self.record_metrics(provider, model)
 
     def reset(self, provider: str, model: str) -> None:
         circuit_key = f"{provider}:{model}"
@@ -255,6 +278,7 @@ class LLMCircuitBreaker:
                 f"[LLMCircuitBreaker] Circuit breaker reset "
                 f"provider={provider} model={model}"
             )
+        self.record_metrics(provider, model)
 
     def get_state(self, provider: str, model: str) -> LLMCircuitBreakerState | None:
         circuit_key = f"{provider}:{model}"
@@ -300,6 +324,67 @@ class LLMCircuitBreaker:
                 )
 
         return circuit_state
+
+    def get_snapshot(self, provider: str, model: str) -> LLMCircuitBreakerSnapshot:
+        checked_at = time.time()
+        circuit_state = self.get_state(provider, model)
+
+        if not circuit_state:
+            return LLMCircuitBreakerSnapshot(
+                provider=provider,
+                model=model,
+                state="closed",
+                failure_count=0,
+                retry_after_seconds=0,
+                opened_until=0.0,
+                half_open=False,
+                last_error_type=None,
+                last_failure_at=None,
+                checked_at=checked_at,
+            )
+
+        state = "closed"
+        retry_after_seconds = 0
+        if circuit_state.opened_until > checked_at:
+            state = "open"
+            retry_after_seconds = max(0, int(circuit_state.opened_until - checked_at))
+        elif circuit_state.half_open:
+            state = "half_open"
+
+        return LLMCircuitBreakerSnapshot(
+            provider=provider,
+            model=model,
+            state=state,
+            failure_count=circuit_state.failure_count,
+            retry_after_seconds=retry_after_seconds,
+            opened_until=circuit_state.opened_until,
+            half_open=circuit_state.half_open,
+            last_error_type=circuit_state.last_error_type,
+            last_failure_at=circuit_state.last_failure_at,
+            checked_at=checked_at,
+        )
+
+    def record_metrics(self, provider: str, model: str) -> LLMCircuitBreakerSnapshot:
+        snapshot = self.get_snapshot(provider, model)
+
+        # Publish one active circuit state and zero the other states.
+        for state in ("closed", "open", "half_open"):
+            LLM_PROVIDER_CIRCUIT_STATE.labels(
+                provider=snapshot.provider,
+                model=snapshot.model,
+                state=state,
+            ).set(1.0 if snapshot.state == state else 0.0)
+
+        LLM_PROVIDER_FAILURE_COUNT.labels(
+            provider=snapshot.provider,
+            model=snapshot.model,
+        ).set(snapshot.failure_count)
+        LLM_PROVIDER_RETRY_AFTER_SECONDS.labels(
+            provider=snapshot.provider,
+            model=snapshot.model,
+        ).set(snapshot.retry_after_seconds)
+
+        return snapshot
 
     def clear(self) -> None:
         self._states.clear()
