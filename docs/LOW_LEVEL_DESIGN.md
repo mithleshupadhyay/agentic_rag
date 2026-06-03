@@ -732,6 +732,18 @@ The dashboard covers query lifecycle rate, query failure rate, and p95/p99
 query latency. The alert rules cover sustained query failure rate and sustained
 p95 query latency.
 
+Local Docker Compose monitoring is provisioned through:
+
+```text
+monitoring/prometheus.yml
+monitoring/grafana_datasource.yml
+monitoring/grafana_dashboard.yml
+```
+
+Prometheus scrapes the API at `api:8000` inside the Compose network. Host
+browsers still reach Prometheus and Grafana through the published
+`PROMETHEUS_PORT` and `GRAFANA_PORT` values.
+
 Current answer verification is deterministic. Synthesized answers must cite
 returned context using bracket numbers such as `[1]`; the verifier rejects
 answers with missing citations or citations that do not map to the returned

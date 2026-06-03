@@ -1,11 +1,3 @@
-x-api-environment: &api-environment
-  DATABASE_URL: ${DOCKER_DATABASE_URL}
-  REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
-  S3_ENDPOINT_URL: ${DOCKER_S3_ENDPOINT_URL}
-  OPENSEARCH_URL: ${DOCKER_OPENSEARCH_URL}
-  KAFKA_BOOTSTRAP_SERVERS: ${DOCKER_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
-  LITELLM_BASE_URL: ${DOCKER_LITELLM_BASE_URL:-}
-
 x-host-gateway: &host-gateway
   - "host.docker.internal:host-gateway"
 
@@ -13,14 +5,76 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.api
     container_name: agentic-rag-api
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - APP_NAME=${APP_NAME:-Agentic RAG}
+      - APP_VERSION=${APP_VERSION:-0.1.0}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8000,http://127.0.0.1:8000}
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-local}
+      - LOCAL_AUTH_TOKEN=${LOCAL_AUTH_TOKEN:-local-dev-token}
+      - LOCAL_USER_ID=${LOCAL_USER_ID:-local-user}
+      - LOCAL_TENANT_ID=${LOCAL_TENANT_ID:-local-tenant}
+      - LOCAL_WORKSPACE_ID=${LOCAL_WORKSPACE_ID:-}
+      - LOCAL_ROLES=${LOCAL_ROLES:-admin,user}
+      - LOCAL_GROUPS=${LOCAL_GROUPS:-}
+      - LOCAL_SCOPES=${LOCAL_SCOPES:-documents:read,documents:write,documents:delete,query:run,ingestion:write}
+      - LOCAL_ACL_VERSION=${LOCAL_ACL_VERSION:-1}
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_AUDIENCE=${OIDC_AUDIENCE:-}
+      - OIDC_JWKS_URL=${OIDC_JWKS_URL:-}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_SOCKET_TIMEOUT_SECONDS=${REDIS_SOCKET_TIMEOUT_SECONDS:-1}
+      - KAFKA_PUBLISHING_ENABLED=${KAFKA_PUBLISHING_ENABLED:-false}
+      - KAFKA_CONSUMING_ENABLED=${KAFKA_CONSUMING_ENABLED:-false}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-agentic-rag-api}
+      - KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS=${KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS:-5}
+      - KAFKA_INGESTION_RETRY_CONSUMER_GROUP=${KAFKA_INGESTION_RETRY_CONSUMER_GROUP:-agentic-rag-ingestion-retry}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-agentic_rag}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-agentic-rag}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - DOCUMENT_UPLOAD_MAX_BYTES=${DOCUMENT_UPLOAD_MAX_BYTES:-26214400}
+      - OPENSEARCH_URL=http://opensearch:9200
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-}
+      - OPENSEARCH_DOCUMENT_INDEX=${OPENSEARCH_DOCUMENT_INDEX:-documents-v1}
+      - OPENSEARCH_CHUNK_INDEX=${OPENSEARCH_CHUNK_INDEX:-chunks-v1}
+      - OPENSEARCH_REQUEST_TIMEOUT_SECONDS=${OPENSEARCH_REQUEST_TIMEOUT_SECONDS:-10}
+      - LLM_SYNTHESIS_ENABLED=${LLM_SYNTHESIS_ENABLED:-false}
+      - LLM_PROVIDER=${LLM_PROVIDER:-litellm}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-}
+      - DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-ollama/llama3.1}
+      - DEFAULT_SMALL_MODEL=${DEFAULT_SMALL_MODEL:-ollama/llama3.1}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-700}
+      - LLM_MAX_INPUT_CHARS=${LLM_MAX_INPUT_CHARS:-64000}
+      - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-8000}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - LLM_RETRY_BACKOFF_SECONDS=${LLM_RETRY_BACKOFF_SECONDS:-0.5}
+      - LLM_CIRCUIT_BREAKER_ENABLED=${LLM_CIRCUIT_BREAKER_ENABLED:-true}
+      - LLM_CIRCUIT_BREAKER_STATE_BACKEND=${LLM_CIRCUIT_BREAKER_STATE_BACKEND:-memory}
+      - LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX=${LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX:-agentic-rag:llm:circuit-breaker}
+      - LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=${LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD:-3}
+      - LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS=${LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS:-60}
+      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-30}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     extra_hosts: *host-gateway
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -47,15 +101,37 @@ services:
   ingestion-worker:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.worker
     container_name: agentic-rag-ingestion-worker
     command: ["python", "-m", "agentic_rag.workers.ingestion"]
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-local}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_PUBLISHING_ENABLED=${KAFKA_PUBLISHING_ENABLED:-false}
+      - KAFKA_CONSUMING_ENABLED=${KAFKA_CONSUMING_ENABLED:-false}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-agentic-rag-ingestion-worker}
+      - KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS=${KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS:-5}
+      - KAFKA_INGESTION_RETRY_CONSUMER_GROUP=${KAFKA_INGESTION_RETRY_CONSUMER_GROUP:-agentic-rag-ingestion-retry}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-agentic_rag}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-agentic-rag}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - INGESTION_WORKER_POLL_SECONDS=${INGESTION_WORKER_POLL_SECONDS:-5}
+      - INGESTION_WORKER_LEASE_SECONDS=${INGESTION_WORKER_LEASE_SECONDS:-300}
+      - INGESTION_RETRY_BASE_SECONDS=${INGESTION_RETRY_BASE_SECONDS:-30}
+      - INGESTION_RETRY_MAX_SECONDS=${INGESTION_RETRY_MAX_SECONDS:-900}
+      - INGESTION_CHUNK_SIZE=${INGESTION_CHUNK_SIZE:-2000}
+      - INGESTION_CHUNK_OVERLAP=${INGESTION_CHUNK_OVERLAP:-200}
     depends_on:
       db-seed:
         condition: service_completed_successfully
@@ -73,15 +149,31 @@ services:
   indexing-worker:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.worker
     container_name: agentic-rag-indexing-worker
     command: ["python", "-m", "agentic_rag.workers.indexing"]
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-agentic-rag-indexing-worker}
+      - OPENSEARCH_URL=http://opensearch:9200
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-}
+      - OPENSEARCH_DOCUMENT_INDEX=${OPENSEARCH_DOCUMENT_INDEX:-documents-v1}
+      - OPENSEARCH_CHUNK_INDEX=${OPENSEARCH_CHUNK_INDEX:-chunks-v1}
+      - OPENSEARCH_REQUEST_TIMEOUT_SECONDS=${OPENSEARCH_REQUEST_TIMEOUT_SECONDS:-10}
+      - OPENSEARCH_INDEX_SHARDS=${OPENSEARCH_INDEX_SHARDS:-1}
+      - OPENSEARCH_INDEX_REPLICAS=${OPENSEARCH_INDEX_REPLICAS:-0}
+      - INDEXING_WORKER_POLL_SECONDS=${INDEXING_WORKER_POLL_SECONDS:-5}
+      - BM25_INDEX_BATCH_SIZE=${BM25_INDEX_BATCH_SIZE:-100}
     depends_on:
       db-seed:
         condition: service_completed_successfully
@@ -99,15 +191,39 @@ services:
   embedding-worker:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.worker
     container_name: agentic-rag-embedding-worker
     command: ["python", "-m", "agentic_rag.workers.embedding"]
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-agentic-rag-embedding-worker}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-litellm}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-gemini/gemini-embedding-001}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
+      - EMBEDDING_VECTOR_VERSION=${EMBEDDING_VECTOR_VERSION:-1}
+      - EMBEDDING_TIMEOUT_SECONDS=${EMBEDDING_TIMEOUT_SECONDS:-30}
+      - EMBEDDING_MAX_INPUT_CHARS=${EMBEDDING_MAX_INPUT_CHARS:-128000}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-32}
+      - EMBEDDING_WORKER_POLL_SECONDS=${EMBEDDING_WORKER_POLL_SECONDS:-5}
+      - EMBEDDING_WORKER_MAX_CHUNKS_PER_LOOP=${EMBEDDING_WORKER_MAX_CHUNKS_PER_LOOP:-100}
+      - LLM_PROVIDER=${LLM_PROVIDER:-litellm}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     extra_hosts: *host-gateway
     depends_on:
       db-seed:
@@ -120,6 +236,52 @@ services:
       - dbnet
       - cachenet
       - eventnet
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: agentic-rag-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/query_alerts.yml:/etc/prometheus/query_alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - appnet
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: agentic-rag-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-agentic_rag}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /var/lib/grafana/dashboards
+        cp /tmp/query_dashboard.json /var/lib/grafana/dashboards/query_dashboard.json
+        exec /run.sh
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana_datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ./monitoring/grafana_dashboard.yml:/etc/grafana/provisioning/dashboards/query.yml:ro
+      - ./monitoring/query_dashboard.json:/tmp/query_dashboard.json:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - appnet
 
   redis:
     image: redis:7-alpine
@@ -140,21 +302,21 @@ services:
     image: apache/kafka:3.7.2
     container_name: agentic-rag-kafka
     environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-3}
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_NUM_PARTITIONS=${KAFKA_TOPIC_PARTITIONS:-3}
+      - KAFKA_LOG_DIRS=/tmp/kraft-combined-logs
     ports:
       - "${KAFKA_PORT:-9092}:9094"
     healthcheck:
@@ -178,23 +340,23 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-3}
-      KAFKA_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
-      KAFKA_INGESTION_PARSE_TOPIC: ${KAFKA_INGESTION_PARSE_TOPIC:-ingestion.parse}
-      KAFKA_INGESTION_METADATA_TOPIC: ${KAFKA_INGESTION_METADATA_TOPIC:-ingestion.metadata}
-      KAFKA_INGESTION_CHUNK_TOPIC: ${KAFKA_INGESTION_CHUNK_TOPIC:-ingestion.chunk}
-      KAFKA_INGESTION_EMBED_TOPIC: ${KAFKA_INGESTION_EMBED_TOPIC:-ingestion.embed}
-      KAFKA_INGESTION_INDEX_TOPIC: ${KAFKA_INGESTION_INDEX_TOPIC:-ingestion.index}
-      KAFKA_RAG_LONG_QUERY_TOPIC: ${KAFKA_RAG_LONG_QUERY_TOPIC:-rag.long_query}
-      KAFKA_EVAL_BATCH_TOPIC: ${KAFKA_EVAL_BATCH_TOPIC:-eval.batch}
-      KAFKA_RETRY_INGESTION_TOPIC: ${KAFKA_RETRY_INGESTION_TOPIC:-retry.ingestion}
-      KAFKA_RETRY_EMBEDDING_TOPIC: ${KAFKA_RETRY_EMBEDDING_TOPIC:-retry.embedding}
-      KAFKA_RETRY_INDEXING_TOPIC: ${KAFKA_RETRY_INDEXING_TOPIC:-retry.indexing}
-      KAFKA_DLQ_INGESTION_TOPIC: ${KAFKA_DLQ_INGESTION_TOPIC:-dlq.ingestion}
-      KAFKA_DLQ_EMBEDDING_TOPIC: ${KAFKA_DLQ_EMBEDDING_TOPIC:-dlq.embedding}
-      KAFKA_DLQ_INDEXING_TOPIC: ${KAFKA_DLQ_INDEXING_TOPIC:-dlq.indexing}
-      KAFKA_DLQ_RAG_TOPIC: ${KAFKA_DLQ_RAG_TOPIC:-dlq.rag}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PARTITIONS=${KAFKA_TOPIC_PARTITIONS:-3}
+      - KAFKA_TOPIC_REPLICATION_FACTOR=${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
+      - KAFKA_INGESTION_PARSE_TOPIC=${KAFKA_INGESTION_PARSE_TOPIC:-ingestion.parse}
+      - KAFKA_INGESTION_METADATA_TOPIC=${KAFKA_INGESTION_METADATA_TOPIC:-ingestion.metadata}
+      - KAFKA_INGESTION_CHUNK_TOPIC=${KAFKA_INGESTION_CHUNK_TOPIC:-ingestion.chunk}
+      - KAFKA_INGESTION_EMBED_TOPIC=${KAFKA_INGESTION_EMBED_TOPIC:-ingestion.embed}
+      - KAFKA_INGESTION_INDEX_TOPIC=${KAFKA_INGESTION_INDEX_TOPIC:-ingestion.index}
+      - KAFKA_RAG_LONG_QUERY_TOPIC=${KAFKA_RAG_LONG_QUERY_TOPIC:-rag.long_query}
+      - KAFKA_EVAL_BATCH_TOPIC=${KAFKA_EVAL_BATCH_TOPIC:-eval.batch}
+      - KAFKA_RETRY_INGESTION_TOPIC=${KAFKA_RETRY_INGESTION_TOPIC:-retry.ingestion}
+      - KAFKA_RETRY_EMBEDDING_TOPIC=${KAFKA_RETRY_EMBEDDING_TOPIC:-retry.embedding}
+      - KAFKA_RETRY_INDEXING_TOPIC=${KAFKA_RETRY_INDEXING_TOPIC:-retry.indexing}
+      - KAFKA_DLQ_INGESTION_TOPIC=${KAFKA_DLQ_INGESTION_TOPIC:-dlq.ingestion}
+      - KAFKA_DLQ_EMBEDDING_TOPIC=${KAFKA_DLQ_EMBEDDING_TOPIC:-dlq.embedding}
+      - KAFKA_DLQ_INDEXING_TOPIC=${KAFKA_DLQ_INDEXING_TOPIC:-dlq.indexing}
+      - KAFKA_DLQ_RAG_TOPIC=${KAFKA_DLQ_RAG_TOPIC:-dlq.rag}
     volumes:
       - ./scripts/kafka-topic.sh:/opt/agentic-rag/scripts/kafka-topic.sh:ro
     entrypoint:
@@ -208,10 +370,10 @@ services:
     image: pgvector/pgvector:pg16
     container_name: agentic-rag-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-agentic_rag}
-      POSTGRES_USER: ${POSTGRES_USER:-agentic_rag}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic_rag}
-      PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
+      - POSTGRES_DB=${POSTGRES_DB:-agentic_rag}
+      - POSTGRES_USER=${POSTGRES_USER:-agentic_rag}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agentic_rag}
+      - PGDATA=${PGDATA:-/var/lib/postgresql/data/pgdata}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -236,9 +398,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-agentic_rag}
-      POSTGRES_USER: ${POSTGRES_USER:-agentic_rag}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic_rag}
+      - POSTGRES_DB=${POSTGRES_DB:-agentic_rag}
+      - POSTGRES_USER=${POSTGRES_USER:-agentic_rag}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agentic_rag}
     entrypoint:
       - /bin/sh
       - -c
@@ -257,15 +419,17 @@ services:
   db-migrate:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.db
     container_name: agentic-rag-db-migrate
     command: ["alembic", "upgrade", "head"]
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
     depends_on:
       postgres-init:
         condition: service_completed_successfully
@@ -276,15 +440,22 @@ services:
   db-seed:
     build:
       context: .
-      dockerfile: Dockerfile.app
-      target: runtime
+      dockerfile: Dockerfile.db
     container_name: agentic-rag-db-seed
     command: ["python", "scripts/seed_local_db.py"]
     env_file:
       - path: .env
         required: false
     environment:
-      <<: *api-environment
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-local}
+      - LOCAL_USER_ID=${LOCAL_USER_ID:-local-user}
+      - LOCAL_TENANT_ID=${LOCAL_TENANT_ID:-local-tenant}
+      - LOCAL_WORKSPACE_ID=${LOCAL_WORKSPACE_ID:-}
+      - LOCAL_ACL_VERSION=${LOCAL_ACL_VERSION:-1}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - DATABASE_ECHO=${DATABASE_ECHO:-false}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -297,8 +468,8 @@ services:
     container_name: agentic-rag-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-agentic_rag}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY_ID:-agentic_rag}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -314,10 +485,10 @@ services:
     depends_on:
       - minio
     environment:
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-agentic_rag}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-agentic-rag}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-agentic_rag}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-agentic_rag_password}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-agentic-rag}
     entrypoint:
       - /bin/sh
       - -c
@@ -337,10 +508,10 @@ services:
     image: opensearchproject/opensearch:2.17.1
     container_name: agentic-rag-opensearch
     environment:
-      discovery.type: single-node
-      DISABLE_SECURITY_PLUGIN: ${OPENSEARCH_DISABLE_SECURITY_PLUGIN:-true}
-      bootstrap.memory_lock: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=${OPENSEARCH_DISABLE_SECURITY_PLUGIN:-true}
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
     ulimits:
       memlock:
         soft: -1
@@ -376,4 +547,8 @@ volumes:
   minio_data:
     driver: local
   opensearch_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local

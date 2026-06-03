@@ -13,12 +13,18 @@ retrieval quality, and production operations.
 | `docs/ARCHITECTURE.md` | Defines the target production architecture. | Keep updated as services become real deployable components; add capacity assumptions for ingestion throughput, retrieval latency, cache hit rate, vectorization percentage, and storage growth. | High |
 | `docs/LOW_LEVEL_DESIGN.md` | Converts architecture into implementation details. | Add exact API contracts, worker contracts, retry rules, data retention rules, index ownership, and service-by-service deployment notes. | High |
 | `docs/NEXT_SPRINT.md` | Tracks upcoming technical scope. | Keep this file updated after every pushed step so the next development sequence stays clear and explainable. | High |
-| `Dockerfile.app` | Builds the shared Python runtime image used by API, migrations, seed, ingestion worker, indexing worker, and embedding worker. | Keep one shared image while API and workers use the same dependencies. Split later into focused Dockerfiles such as `Dockerfile.ingestion-worker`, `Dockerfile.embedding-worker`, or `Dockerfile.browser-worker` only when workers need heavy parser/OCR tools, ML/GPU libraries, browser automation, or different runtime hardening. | Medium |
-| `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, Redis, MinIO, OpenSearch, Kafka with topic provisioning, migrations, seed, ingestion worker, indexing worker, and embedding worker. | Add queue-backed Kafka consumers and profiles for lightweight API-only and full ingestion stacks. | High |
+| `Dockerfile.api` | Builds the FastAPI runtime image for the local API service. | Add API-specific runtime hardening, OpenTelemetry system dependencies, and production image labels when deployment packaging is introduced. | Medium |
+| `Dockerfile.worker` | Builds the shared worker runtime image used by ingestion, indexing, and embedding workers. | Split into worker-specific Dockerfiles only when a worker needs heavier parser/OCR, browser, GPU, or model runtime dependencies. | Medium |
+| `Dockerfile.db` | Builds the database job image used by migrations and local seed tasks. | Keep database jobs separate from API and workers so migration/seed commands stay explicit and independently runnable. | Medium |
+| `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, Redis, MinIO, OpenSearch, Kafka with topic provisioning, migrations, seed, ingestion worker, indexing worker, embedding worker, Prometheus, and Grafana with explicit service-level environment variables. | Add queue-backed Kafka consumers and profiles for lightweight API-only and full ingestion stacks. | High |
+| `.env.template` | Documents local host defaults for API, auth, database, Redis, Kafka, object storage, OpenSearch, LLM, worker, agent, and monitoring settings. | Keep host-local defaults separate from Docker Compose service-name routing. | Medium |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
 | `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, Kafka producer, and Kafka consumer Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
-| `monitoring/query_dashboard.json` | Grafana dashboard for query lifecycle rate, query failure rate, and p95/p99 query latency. | Wire into Grafana provisioning when local Prometheus/Grafana services are added to Docker Compose. | Medium |
-| `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate and p95 query latency. | Wire into Prometheus rule loading when local Prometheus/Grafana services are added to Docker Compose. | Medium |
+| `monitoring/prometheus.yml` | Local Prometheus scrape and rule-loading configuration for the Compose stack. | Add scrape jobs for workers, OpenSearch, Kafka, PostgreSQL, Redis, and object storage when safe exporters are introduced. | Medium |
+| `monitoring/grafana_datasource.yml` | Local Grafana datasource provisioning for Prometheus. | Add additional datasources only when tracing or log backends are added locally. | Medium |
+| `monitoring/grafana_dashboard.yml` | Local Grafana dashboard provider for the query dashboard file. | Add more dashboard providers only when dashboard ownership needs to split by domain. | Low |
+| `monitoring/query_dashboard.json` | Grafana dashboard for query lifecycle rate, query failure rate, and p95/p99 query latency. | Add panels for retrieval latency, LLM provider health, LLM cost, ingestion throughput, indexing lag, and worker queue health as metrics land. | Medium |
+| `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate and p95 query latency. | Add alert rules for worker failures, DLQ growth, Kafka lag, provider circuit state, and budget anomalies as those metrics land. | Medium |
 | `scripts/smoke_embedding_worker.py` | Local Docker smoke check that verifies the embedding-worker container can import the worker module and reach the configured database without invoking an external embedding provider. | Add a PostgreSQL/pgvector embedding smoke when test-safe local embeddings are available. | Medium |
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
@@ -105,6 +111,9 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-03 | Normalized Docker Compose service environment variables to explicit, readable names and removed stale Docker-only template variables. |
+| 2026-06-03 | Split the old shared app Dockerfile into API, worker, and database job Dockerfiles and updated Compose build wiring. |
+| 2026-06-03 | Wired local Prometheus and Grafana provisioning into Docker Compose for query metrics, dashboard loading, and alert rule loading. |
 | 2026-06-03 | Added the first query observability dashboard and Prometheus alert rules for query failure rate and latency. |
 | 2026-06-03 | Added low-cardinality Prometheus metrics for query lifecycle counts and query latency. |
 | 2026-06-03 | Added lifecycle SSE streaming for query responses with `query_started`, `query_completed`, and `query_failed` events around the existing BM25 query flow. |
@@ -115,8 +124,8 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Wire local Prometheus and Grafana provisioning into Docker Compose. |
-| 2 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
-| 3 | Add provider health snapshots and safe circuit-breaker metrics. |
-| 4 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |
-| 5 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 1 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
+| 2 | Add provider health snapshots and safe circuit-breaker metrics. |
+| 3 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |
+| 4 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 5 | Add local monitoring smoke checks for Prometheus target health and Grafana dashboard provisioning. |

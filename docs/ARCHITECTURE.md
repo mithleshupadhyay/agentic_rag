@@ -673,6 +673,8 @@ redis
 opensearch
 minio
 kafka
+prometheus
+grafana
 otel-collector
 ```
 
@@ -711,7 +713,7 @@ OpenTofu should manage:
 
 | Scale | Architecture |
 |---|---|
-| Local | Docker Compose with API services, workers, Postgres, Redis, OpenSearch, MinIO, Kafka |
+| Local | Docker Compose with API services, workers, Postgres, Redis, OpenSearch, MinIO, Kafka, Prometheus, Grafana |
 | 1k RPS | Multiple service replicas, Redis cache, PostgreSQL connection pooling |
 | 10k RPS | ALB, ECS/Fargate microservices, RDS PostgreSQL with pgvector, ElastiCache, OpenSearch, Kafka, worker autoscaling |
 | 20k RPS | Stronger autoscaling, alarms, DLQs, tracing, cache tuning |
