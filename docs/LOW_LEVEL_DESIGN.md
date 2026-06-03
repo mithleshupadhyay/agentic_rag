@@ -464,20 +464,25 @@ agent_runs
 - tenant_id
 - workspace_id
 - user_id
-- query
+- query_text
 - status
 - retrieval_strategy
 - confidence_score
-- started_at
-- completed_at
 - total_steps
 - total_tool_calls
+- limits
 - timeout_at
+- started_at
+- completed_at
+- error_type
+- error_message
+- created_at
+- updated_at
 
 agent_steps
 - id
-- agent_run_id
 - tenant_id
+- agent_run_id
 - node_name
 - step_number
 - tool_name
@@ -486,15 +491,18 @@ agent_steps
 - latency_ms
 - status
 - error_type
+- error_message
 - created_at
+- updated_at
 
 agent_checkpoints
 - id
-- agent_run_id
 - tenant_id
+- agent_run_id
 - checkpoint_key
 - state
 - created_at
+- updated_at
 ```
 
 ### Logs, Feedback, And Evaluation Tables
@@ -953,6 +961,8 @@ Current local implementation:
 ```text
 src/agentic_rag/agent/graph.py
 src/agentic_rag/agent/runtime.py
+src/agentic_rag/shared/db/models/agent_runs.py
+src/agentic_rag/shared/db/crud/agent_runs.py
 ```
 
 The local runtime skeleton creates `AgentStateModel` instances from
@@ -966,8 +976,15 @@ classification, query rewrite, filter planning, and retrieval strategy
 selection, records a checkpoint after each node, and stops immediately if the
 existing runtime guardrails return a timeout or handoff decision. This graph
 intentionally stops at the retrieval boundary. It does not add internal API
-endpoints, database persistence, retrieval tool execution, LLM calls,
-cancellation wiring, or streaming events yet.
+endpoints, retrieval tool execution, LLM calls, cancellation wiring, or
+streaming events yet.
+
+The local persistence layer now has tenant-scoped `agent_runs`, `agent_steps`,
+and `agent_checkpoints` tables. The CRUD layer can create an agent run, record a
+node step, save a serialized checkpoint, and fetch a run with its steps and
+checkpoints. This storage slice is intentionally not wired into API endpoints or
+graph execution yet; the next agent slice should persist checkpoints from the
+graph runner and then add cancellation checks before retrieval tools are wired.
 
 ### LLM Gateway
 

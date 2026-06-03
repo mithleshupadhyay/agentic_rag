@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -6,6 +8,9 @@ from scripts import seed_local_db as db_seed
 from agentic_rag.shared.config import Settings
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.models import (
+    AgentCheckpoint,
+    AgentRun,
+    AgentStep,
     ChunkAcl,
     Document,
     DocumentAcl,
@@ -78,6 +83,9 @@ def test_metadata_contains_core_tables() -> None:
         "chunk_embeddings",
         "ingestion_jobs",
         "query_runs",
+        "agent_runs",
+        "agent_steps",
+        "agent_checkpoints",
     }
 
     assert expected_tables.issubset(Base.metadata.tables)
@@ -92,6 +100,9 @@ def test_models_create_sqlite_schema_for_unit_tests() -> None:
     assert "document_chunks" in inspect(engine).get_table_names()
     assert "ingestion_jobs" in inspect(engine).get_table_names()
     assert "query_runs" in inspect(engine).get_table_names()
+    assert "agent_runs" in inspect(engine).get_table_names()
+    assert "agent_steps" in inspect(engine).get_table_names()
+    assert "agent_checkpoints" in inspect(engine).get_table_names()
 
 
 def test_seed_local_development_data_creates_tenant_and_user(
@@ -131,6 +142,7 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
     Base.metadata.create_all(engine)
 
     with Session(engine) as session:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         tenant = Tenant(
             tenant_id="tenant-a",
             name="Tenant A",
@@ -223,6 +235,34 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
             llm_output_tokens=0,
             llm_cost_estimate=0.0,
         )
+        agent_run = AgentRun(
+            tenant_id="tenant-a",
+            workspace_id=None,
+            user_id="user-1",
+            query_text="What does the policy say?",
+            status="running",
+            retrieval_strategy="bm25",
+            confidence_score=0.0,
+            total_steps=1,
+            total_tool_calls=0,
+            limits={"max_steps": 8},
+            timeout_at=now,
+            started_at=now,
+        )
+        agent_step = AgentStep(
+            tenant_id="tenant-a",
+            agent_run=agent_run,
+            node_name="classify_intent",
+            step_number=1,
+            tool_input={},
+            status="completed",
+        )
+        agent_checkpoint = AgentCheckpoint(
+            tenant_id="tenant-a",
+            agent_run=agent_run,
+            checkpoint_key="step-0001-classify_intent",
+            state={"step_count": 1},
+        )
 
         session.add_all(
             [
@@ -234,6 +274,9 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
                 chunk_acl,
                 ingestion_job,
                 query_run,
+                agent_run,
+                agent_step,
+                agent_checkpoint,
             ]
         )
         session.commit()
@@ -246,3 +289,9 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
         stored_query_run = session.scalars(select(QueryRun)).one()
         assert stored_query_run.tenant_id == "tenant-a"
         assert stored_query_run.request_id == "request-id-1"
+        stored_agent_run = session.scalars(select(AgentRun)).one()
+        assert stored_agent_run.tenant_id == "tenant-a"
+        assert stored_agent_run.steps[0].node_name == "classify_intent"
+        assert stored_agent_run.checkpoints[0].checkpoint_key == (
+            "step-0001-classify_intent"
+        )

@@ -1,3 +1,8 @@
+from agentic_rag.shared.db.models.agent_runs import (
+    AgentCheckpoint,
+    AgentRun,
+    AgentStep,
+)
 from agentic_rag.shared.db.models.acl import ChunkAcl, DocumentAcl
 from agentic_rag.shared.db.models.documents import (
     ChunkEmbedding,
@@ -16,6 +21,9 @@ from agentic_rag.shared.db.models.tenants import (
 )
 
 __all__ = [
+    "AgentCheckpoint",
+    "AgentRun",
+    "AgentStep",
     "ChunkAcl",
     "ChunkEmbedding",
     "Document",
