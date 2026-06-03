@@ -1,11 +1,7 @@
 import pytest
 from litellm import RateLimitError, ServiceUnavailableError
 
-from agentic_rag.llm.circuit_breaker import (
-    clear_llm_circuit_breakers,
-    get_llm_circuit_breaker_state,
-    record_llm_circuit_breaker_failure,
-)
+from agentic_rag.llm.circuit_breaker import llm_circuit_breaker
 from agentic_rag.llm.gateway import generate_chat_completion, generate_embeddings
 from agentic_rag.shared.schemas.auth import AuthContext, TokenType
 from agentic_rag.shared.schemas.llm import (
@@ -46,9 +42,9 @@ class FakeEmbeddingResponse:
 
 @pytest.fixture(autouse=True)
 def clear_llm_circuit_breaker_state():
-    clear_llm_circuit_breakers()
+    llm_circuit_breaker.clear()
     yield
-    clear_llm_circuit_breakers()
+    llm_circuit_breaker.clear()
 
 
 def test_generate_chat_completion_calls_litellm(monkeypatch) -> None:
@@ -315,7 +311,7 @@ def test_generate_chat_completion_opens_circuit_after_failures(monkeypatch) -> N
         generate_chat_completion(request)
 
     assert len(calls) == 2
-    circuit_state = get_llm_circuit_breaker_state("litellm", "test-model")
+    circuit_state = llm_circuit_breaker.get_state("litellm", "test-model")
     assert circuit_state
     assert circuit_state.failure_count == 2
     assert circuit_state.opened_until == 1060.0
@@ -326,7 +322,7 @@ def test_generate_chat_completion_fails_fast_when_circuit_open(monkeypatch) -> N
         raise AssertionError("Provider should not be called while circuit is open.")
 
     monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
-    record_llm_circuit_breaker_failure(
+    llm_circuit_breaker.record_failure(
         provider="litellm",
         model="test-model",
         error=RateLimitError(
@@ -371,7 +367,7 @@ def test_generate_chat_completion_resets_circuit_after_cooldown_success(
         "agentic_rag.llm.circuit_breaker.time.time",
         lambda: current_time[0],
     )
-    record_llm_circuit_breaker_failure(
+    llm_circuit_breaker.record_failure(
         provider="litellm",
         model="test-model",
         error=RateLimitError(
@@ -406,7 +402,7 @@ def test_generate_chat_completion_resets_circuit_after_cooldown_success(
 
     assert len(calls) == 1
     assert response.text == "Grounded answer [1]."
-    assert get_llm_circuit_breaker_state("litellm", "test-model") is None
+    assert llm_circuit_breaker.get_state("litellm", "test-model") is None
 
 
 def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) -> None:
@@ -417,7 +413,7 @@ def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) ->
         return FakeResponse()
 
     monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
-    record_llm_circuit_breaker_failure(
+    llm_circuit_breaker.record_failure(
         provider="litellm",
         model="test-model",
         error=RateLimitError(

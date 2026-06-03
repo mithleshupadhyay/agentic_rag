@@ -45,6 +45,20 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
     assert settings.kafka_ingestion_retry_consumer_group == "retry-group-a"
 
 
+def test_redis_and_llm_circuit_breaker_settings() -> None:
+    settings = Settings(
+        REDIS_URL="redis://redis:6379/1",
+        REDIS_SOCKET_TIMEOUT_SECONDS=2.5,
+        LLM_CIRCUIT_BREAKER_STATE_BACKEND="redis",
+        LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX="agentic-rag:test:circuit",
+    )
+
+    assert settings.redis_url == "redis://redis:6379/1"
+    assert settings.redis_socket_timeout_seconds == 2.5
+    assert settings.llm_circuit_breaker_state_backend == "redis"
+    assert settings.llm_circuit_breaker_redis_key_prefix == "agentic-rag:test:circuit"
+
+
 def test_metadata_contains_core_tables() -> None:
     expected_tables = {
         "tenants",

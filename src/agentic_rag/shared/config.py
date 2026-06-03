@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +38,16 @@ class Settings(BaseSettings):
         default=20,
         ge=0,
         validation_alias="DATABASE_MAX_OVERFLOW",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias="REDIS_URL",
+    )
+    redis_socket_timeout_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=30.0,
+        validation_alias="REDIS_SOCKET_TIMEOUT_SECONDS",
     )
     kafka_publishing_enabled: bool = Field(
         default=False,
@@ -245,6 +256,14 @@ class Settings(BaseSettings):
     llm_circuit_breaker_enabled: bool = Field(
         default=True,
         validation_alias="LLM_CIRCUIT_BREAKER_ENABLED",
+    )
+    llm_circuit_breaker_state_backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        validation_alias="LLM_CIRCUIT_BREAKER_STATE_BACKEND",
+    )
+    llm_circuit_breaker_redis_key_prefix: str = Field(
+        default="agentic-rag:llm:circuit-breaker",
+        validation_alias="LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX",
     )
     llm_circuit_breaker_failure_threshold: int = Field(
         default=3,

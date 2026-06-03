@@ -904,7 +904,12 @@ dimension against the configured pgvector dimension before workers persist
 vectors. Current local testing uses the Gemini API model
 `gemini-embedding-001`, addressed through LiteLLM as
 `gemini/gemini-embedding-001`, with 768 output dimensions to keep the existing
-pgvector schema.
+pgvector schema. The circuit breaker stores provider/model health in memory by
+default for simple local runs. Production and multi-replica deployments can set
+`LLM_CIRCUIT_BREAKER_STATE_BACKEND=redis` so API and worker replicas share open,
+half-open, and reset state through Redis. If Redis is temporarily unavailable,
+the gateway logs the storage failure and falls back to the in-process memory
+state instead of dropping circuit-breaker protection.
 
 Configuration:
 
@@ -919,9 +924,12 @@ LLM_MAX_OUTPUT_TOKENS=8000
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=0.5
 LLM_CIRCUIT_BREAKER_ENABLED=true
+LLM_CIRCUIT_BREAKER_STATE_BACKEND=memory
+LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX=agentic-rag:llm:circuit-breaker
 LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
 LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS=60
 LLM_TIMEOUT_SECONDS=30
+REDIS_URL=redis://localhost:6379/0
 EMBEDDING_PROVIDER=litellm
 EMBEDDING_MODEL_NAME=gemini/gemini-embedding-001
 EMBEDDING_DIMENSION=768

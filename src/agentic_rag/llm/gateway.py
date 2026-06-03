@@ -14,11 +14,7 @@ from litellm import (
     embedding as litellm_embedding,
 )
 
-from agentic_rag.llm.circuit_breaker import (
-    check_llm_circuit_breaker,
-    record_llm_circuit_breaker_failure,
-    reset_llm_circuit_breaker,
-)
+from agentic_rag.llm.circuit_breaker import llm_circuit_breaker
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.llm import (
     ChatCompletionRequest,
@@ -68,7 +64,7 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         )
 
     if settings.llm_circuit_breaker_enabled:
-        check_llm_circuit_breaker(provider, model)
+        llm_circuit_breaker.check(provider, model)
 
     logger.info(
         f"[LLMGateway] Chat completion started provider={provider} "
@@ -114,7 +110,7 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         ) as e:
             if attempt >= max_attempts:
                 if settings.llm_circuit_breaker_enabled:
-                    record_llm_circuit_breaker_failure(
+                    llm_circuit_breaker.record_failure(
                         provider=provider,
                         model=model,
                         error=e,
@@ -150,7 +146,7 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         raise RuntimeError("LLM response was not returned.")
 
     if settings.llm_circuit_breaker_enabled:
-        reset_llm_circuit_breaker(provider, model)
+        llm_circuit_breaker.reset(provider, model)
 
     choices = getattr(response, "choices", None) or []
     if not choices:
@@ -232,7 +228,7 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         )
 
     if settings.llm_circuit_breaker_enabled:
-        check_llm_circuit_breaker(provider, model)
+        llm_circuit_breaker.check(provider, model)
 
     logger.info(
         f"[LLMGateway] Embedding request started tenant={request.auth.tenant_id} "
@@ -275,7 +271,7 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         ) as e:
             if attempt >= max_attempts:
                 if settings.llm_circuit_breaker_enabled:
-                    record_llm_circuit_breaker_failure(
+                    llm_circuit_breaker.record_failure(
                         provider=provider,
                         model=model,
                         error=e,
@@ -312,7 +308,7 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         raise RuntimeError("Embedding response was not returned.")
 
     if settings.llm_circuit_breaker_enabled:
-        reset_llm_circuit_breaker(provider, model)
+        llm_circuit_breaker.reset(provider, model)
 
     response_data = None
     if isinstance(response, dict):
