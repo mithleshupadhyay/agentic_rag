@@ -17,12 +17,14 @@ retrieval quality, and production operations.
 | `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, Redis, MinIO, OpenSearch, Kafka with topic provisioning, migrations, seed, ingestion worker, indexing worker, and embedding worker. | Add queue-backed Kafka consumers and profiles for lightweight API-only and full ingestion stacks. | High |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
 | `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, Kafka producer, and Kafka consumer Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
+| `monitoring/query_dashboard.json` | Grafana dashboard for query lifecycle rate, query failure rate, and p95/p99 query latency. | Wire into Grafana provisioning when local Prometheus/Grafana services are added to Docker Compose. | Medium |
+| `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate and p95 query latency. | Wire into Prometheus rule loading when local Prometheus/Grafana services are added to Docker Compose. | Medium |
 | `scripts/smoke_embedding_worker.py` | Local Docker smoke check that verifies the embedding-worker container can import the worker module and reach the configured database without invoking an external embedding provider. | Add a PostgreSQL/pgvector embedding smoke when test-safe local embeddings are available. | Medium |
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add more focused Docker smoke scripts for OpenSearch, pgvector retrieval, and full upload-to-query flow. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
-| `src/agentic_rag/observability/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle and latency metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, provider health, and worker queues as those slices land. | High |
+| `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle and latency metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, provider health, and worker queues as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, and ingestion job creation. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
@@ -103,6 +105,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-03 | Added the first query observability dashboard and Prometheus alert rules for query failure rate and latency. |
 | 2026-06-03 | Added low-cardinality Prometheus metrics for query lifecycle counts and query latency. |
 | 2026-06-03 | Added lifecycle SSE streaming for query responses with `query_started`, `query_completed`, and `query_failed` events around the existing BM25 query flow. |
 | 2026-06-03 | Added tenant-scoped query-run cancellation with owner/admin API authorization and conflict handling for completed, failed, or cancelled runs. |
@@ -112,7 +115,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add first dashboard panels and alert rules for query lifecycle metrics. |
+| 1 | Wire local Prometheus and Grafana provisioning into Docker Compose. |
 | 2 | Add broader topic-backed worker scheduling beyond the current ingestion retry consumer path. |
 | 3 | Add provider health snapshots and safe circuit-breaker metrics. |
 | 4 | Wire the agent runtime skeleton into LangGraph orchestration, persisted agent runs, and retrieval/LLM tool execution when the next agent slice is selected. |

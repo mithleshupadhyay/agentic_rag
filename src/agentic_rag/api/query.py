@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.observability.metrics import (
+from agentic_rag.monitoring.metrics import (
     QUERY_LATENCY_SECONDS,
     QUERY_LIFECYCLE_TOTAL,
 )

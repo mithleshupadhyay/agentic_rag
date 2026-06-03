@@ -263,7 +263,7 @@ src/agentic_rag/
 |
 +-- storage/
 +-- ingestion/
-+-- observability/
++-- monitoring/
 ```
 
 ## Runtime Query Flow

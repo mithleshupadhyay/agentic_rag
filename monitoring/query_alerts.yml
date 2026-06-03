@@ -1,0 +1,32 @@
+groups:
+  - name: agentic-rag-query-alerts
+    rules:
+      - alert: AgenticRagQueryHighFailureRate
+        expr: |
+          100 * sum(rate(agentic_rag_query_lifecycle_total{status="failed"}[5m]))
+          / clamp_min(sum(rate(agentic_rag_query_lifecycle_total{status=~"completed|failed"}[5m])), 0.001)
+          > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: query-api
+        annotations:
+          summary: Agentic RAG query failure rate is high
+          description: Query failure rate has stayed above 5% for 10 minutes.
+
+      - alert: AgenticRagQueryHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(agentic_rag_query_latency_seconds_bucket{status="completed"}[5m])
+            )
+          )
+          > 2.5
+        for: 10m
+        labels:
+          severity: warning
+          service: query-api
+        annotations:
+          summary: Agentic RAG query p95 latency is high
+          description: Query p95 latency has stayed above 2.5 seconds for 10 minutes.

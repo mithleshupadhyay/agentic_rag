@@ -131,7 +131,7 @@ src/agentic_rag/
 |   +-- opensearch.py
 |   +-- pgvector.py
 |
-+-- observability/
++-- monitoring/
     +-- metrics.py
     +-- tracing.py
     +-- audit.py
@@ -704,7 +704,7 @@ context building, and deterministic answer verification first. Later steps add
 planner/tool routing, reformulation, vector search, web search, and full agent
 runtime.
 
-Current query metrics are defined in `src/agentic_rag/observability/metrics.py`
+Current query metrics are defined in `src/agentic_rag/monitoring/metrics.py`
 and exposed through the existing `/metrics` endpoint:
 
 ```text
@@ -720,6 +720,17 @@ agentic_rag_query_latency_seconds
 The query metrics intentionally exclude tenant IDs, user IDs, workspace IDs,
 request IDs, agent run IDs, raw query text, and document identifiers to avoid
 high-cardinality metrics and sensitive data exposure.
+
+The first dashboard and alert artifacts are:
+
+```text
+monitoring/query_dashboard.json
+monitoring/query_alerts.yml
+```
+
+The dashboard covers query lifecycle rate, query failure rate, and p95/p99
+query latency. The alert rules cover sustained query failure rate and sustained
+p95 query latency.
 
 Current answer verification is deterministic. Synthesized answers must cite
 returned context using bracket numbers such as `[1]`; the verifier rejects
