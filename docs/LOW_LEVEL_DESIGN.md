@@ -816,6 +816,12 @@ Content-Type: text/event-stream
 event: query_started
 data: {"event":"query_started","agent_run_id":"...","data":{"request_id":"..."}}
 
+event: agent_step_completed
+data: {"event":"agent_step_completed","agent_run_id":"...","data":{"node_name":"bm25_search","step_number":5}}
+
+event: answer_token
+data: {"event":"answer_token","agent_run_id":"...","data":{"text_delta":"...","token_index":1}}
+
 event: query_completed
 data: {"event":"query_completed","agent_run_id":"...","data":{"response":{...}}}
 
@@ -823,10 +829,10 @@ event: query_failed
 data: {"event":"query_failed","agent_run_id":"...","data":{"error_type":"...","error_message":"..."}}
 ```
 
-The current streaming endpoint reuses the existing BM25 query flow and streams
-query lifecycle events around the final `QueryResponse`. Token-by-token LLM
-streaming is intentionally deferred until the agent runtime stream is wired into
-the query API contract.
+The streaming endpoint now runs the agent runtime stream. It emits the existing
+query lifecycle events, passes through runtime step events, streams answer token
+deltas, and finishes with a `query_completed` event that carries a `QueryResponse`
+payload. Runtime failures are converted into a final `query_failed` event.
 
 Query run endpoints:
 
@@ -998,11 +1004,13 @@ when a database session is available. If another flow has cancelled the run, the
 graph records a final cancellation checkpoint for that node, stops with
 `cancelled`, and persists the cancelled step status.
 
-The streamed graph runner emits runtime events without exposing an API endpoint
-yet. It emits `agent_started`, `agent_step_completed`, `answer_token`,
-`agent_completed`, and `agent_failed` events. The streamed answer generation path
-uses the LLM gateway token stream after the same context guardrail passes, then
-runs the same grounding verification before completion.
+The streamed graph runner emits `agent_started`, `agent_step_completed`,
+`answer_token`, `agent_completed`, and `agent_failed` events. The query stream API
+maps those runtime events into public SSE events while preserving the existing
+`query_started`, `query_completed`, and `query_failed` lifecycle contract. The
+streamed answer generation path uses the LLM gateway token stream after the same
+context guardrail passes, then runs the same grounding verification before
+completion.
 
 ### LLM Gateway
 
@@ -1036,8 +1044,8 @@ src/agentic_rag/llm/circuit_breaker.py
 The local gateway supports chat completion, token streaming, and embedding
 generation through LiteLLM. Streaming emits token delta events and a final
 completed event with model, provider, usage, latency, cost, and metadata. The
-streaming contract is now consumed by the agent runtime stream and is not wired
-into the query API yet. Embedding calls enforce input budget, retry transient
+streaming contract is now consumed by the agent runtime stream and exposed
+through the query stream API. Embedding calls enforce input budget, retry transient
 provider failures, reuse circuit-breaker protection,
 and validate the returned vector dimension against the configured pgvector
 dimension before workers persist vectors. Current local testing uses the Gemini

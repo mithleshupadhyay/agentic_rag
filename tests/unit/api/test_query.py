@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -20,6 +21,11 @@ from agentic_rag.shared.db.crud.query_runs import (
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.common import Citation
+from agentic_rag.shared.schemas.agent import (
+    AgentRunStatus,
+    AgentStreamEvent,
+    AgentStreamEventType,
+)
 from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse
 from agentic_rag.shared.schemas.retrieval import (
     ContextChunk,
@@ -273,9 +279,10 @@ def test_query_endpoint_validates_request_body() -> None:
     assert response.status_code == 422
 
 
-def test_query_stream_endpoint_returns_started_and_completed_events(monkeypatch) -> None:
+def test_query_stream_endpoint_returns_runtime_events(monkeypatch) -> None:
     document_id = uuid4()
     chunk_id = uuid4()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     user_context = UserContext(
         id="user-1",
         customer_id="tenant-a",
@@ -285,12 +292,8 @@ def test_query_stream_endpoint_returns_started_and_completed_events(monkeypatch)
     )
     captured = {}
 
-    def fake_run_bm25_query(user_context, request, db, request_id, agent_run_id):
-        captured["user_context"] = user_context
-        captured["request"] = request
-        captured["db"] = db
-        captured["request_id"] = request_id
-        captured["agent_run_id"] = agent_run_id
+    def fake_stream_agent_runtime_graph(**kwargs):
+        captured.update(kwargs)
         citation = Citation(
             document_id=document_id,
             chunk_id=chunk_id,
@@ -298,29 +301,58 @@ def test_query_stream_endpoint_returns_started_and_completed_events(monkeypatch)
             quote="Security policy content.",
             score=2.1,
         )
-        return QueryResponse(
-            agent_run_id=agent_run_id,
-            answer="LLM synthesis is not enabled yet. Retrieved 1 context chunks for this query.",
-            citations=[citation],
-            context=[
-                ContextChunk(
-                    chunk_id=chunk_id,
-                    document_id=document_id,
-                    content="Security policy content.",
-                    token_count=3,
-                    citation=citation,
-                )
-            ],
-            context_token_count=3,
-            confidence_score=0.0,
-            retrieval_strategy=RetrievalStrategy.BM25,
-            latency_ms=15,
-            synthesis_enabled=False,
+        context_chunk = ContextChunk(
+            chunk_id=chunk_id,
+            document_id=document_id,
+            content="Security policy content.",
+            token_count=3,
+            citation=citation,
+        )
+        yield AgentStreamEvent(
+            event=AgentStreamEventType.AGENT_STARTED,
+            agent_run_id=kwargs["agent_run_id"],
+            status=AgentRunStatus.RUNNING,
+            created_at=now,
+        )
+        yield AgentStreamEvent(
+            event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+            agent_run_id=kwargs["agent_run_id"],
+            node_name="bm25_search",
+            status=AgentRunStatus.RUNNING,
+            step_number=5,
+            data={"checkpoint_key": "step-0005-bm25_search"},
+            created_at=now,
+        )
+        yield AgentStreamEvent(
+            event=AgentStreamEventType.ANSWER_TOKEN,
+            agent_run_id=kwargs["agent_run_id"],
+            node_name="generate_answer",
+            status=AgentRunStatus.RUNNING,
+            text_delta="Security policy content",
+            data={"token_index": 1, "model": "test-model", "provider": "test-provider"},
+            created_at=now,
+        )
+        yield AgentStreamEvent(
+            event=AgentStreamEventType.AGENT_COMPLETED,
+            agent_run_id=kwargs["agent_run_id"],
+            status=AgentRunStatus.COMPLETED,
+            data={
+                "answer": "Security policy content [1].",
+                "citations": [citation.model_dump(mode="json")],
+                "context": [context_chunk.model_dump(mode="json")],
+                "context_token_count": 3,
+                "confidence_score": 1.0,
+                "retrieval_strategy": "bm25",
+                "checkpoint_count": 8,
+                "context_chunks": 1,
+                "citation_count": 1,
+            },
+            created_at=now,
         )
 
     monkeypatch.setattr(
-        "agentic_rag.api.query.run_bm25_query",
-        fake_run_bm25_query,
+        "agentic_rag.api.query.stream_agent_runtime_graph",
+        fake_stream_agent_runtime_graph,
     )
 
     for client in client_with_user(user_context):
@@ -340,22 +372,36 @@ def test_query_stream_endpoint_returns_started_and_completed_events(monkeypatch)
         for block in response.text.strip().split("\n\n")
         if block
     ]
-    assert len(event_blocks) == 2
+    assert len(event_blocks) == 4
     assert event_blocks[0].splitlines()[0] == "event: query_started"
-    assert event_blocks[1].splitlines()[0] == "event: query_completed"
+    assert event_blocks[1].splitlines()[0] == "event: agent_step_completed"
+    assert event_blocks[2].splitlines()[0] == "event: answer_token"
+    assert event_blocks[3].splitlines()[0] == "event: query_completed"
 
     started_payload = json.loads(event_blocks[0].splitlines()[1].removeprefix("data: "))
-    completed_payload = json.loads(event_blocks[1].splitlines()[1].removeprefix("data: "))
+    step_payload = json.loads(event_blocks[1].splitlines()[1].removeprefix("data: "))
+    token_payload = json.loads(event_blocks[2].splitlines()[1].removeprefix("data: "))
+    completed_payload = json.loads(event_blocks[3].splitlines()[1].removeprefix("data: "))
 
     assert started_payload["agent_run_id"] == str(captured["agent_run_id"])
     assert started_payload["data"]["request_id"] == "stream-request-id"
+    assert started_payload["data"]["workspace_id"] == "workspace-a"
+    assert step_payload["data"]["node_name"] == "bm25_search"
+    assert step_payload["data"]["step_number"] == 5
+    assert token_payload["data"]["text_delta"] == "Security policy content"
+    assert token_payload["data"]["token_index"] == 1
     assert completed_payload["agent_run_id"] == started_payload["agent_run_id"]
     assert completed_payload["data"]["response"]["agent_run_id"] == started_payload["agent_run_id"]
+    assert completed_payload["data"]["response"]["answer"] == "Security policy content [1]."
     assert completed_payload["data"]["response"]["retrieval_strategy"] == "bm25"
     assert completed_payload["data"]["response"]["context_token_count"] == 3
-    assert captured["request"].stream is True
-    assert captured["request"].query == "security policy"
-    assert captured["request_id"] == "stream-request-id"
+    assert completed_payload["data"]["response"]["synthesis_enabled"] is True
+    assert captured["query"] == "security policy"
+    assert captured["auth"].user_id == "user-1"
+    assert captured["auth"].tenant_id == "tenant-a"
+    assert captured["auth"].workspace_id == "workspace-a"
+    assert captured["retrieval_filters"].workspace_id == "workspace-a"
+    assert captured["retrieval_limit"] == 20
     assert captured["db"] is not None
 
 
@@ -386,12 +432,12 @@ def test_query_stream_endpoint_returns_failed_event(monkeypatch) -> None:
         or 0
     )
 
-    def fake_run_bm25_query(user_context, request, db, request_id, agent_run_id):
+    def fake_stream_agent_runtime_graph(**kwargs):
         raise RuntimeError("retrieval unavailable")
 
     monkeypatch.setattr(
-        "agentic_rag.api.query.run_bm25_query",
-        fake_run_bm25_query,
+        "agentic_rag.api.query.stream_agent_runtime_graph",
+        fake_stream_agent_runtime_graph,
     )
 
     for client in client_with_user(user_context):

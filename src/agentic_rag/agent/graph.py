@@ -1391,6 +1391,23 @@ def stream_agent_runtime_graph(
         data={
             "stop_reason": graph_state.stop_reason,
             "answer": graph_state.agent_state.final_answer,
+            "citations": [
+                citation.model_dump(mode="json")
+                for citation in graph_state.agent_state.citations
+            ],
+            "context": [
+                context_chunk.model_dump(mode="json")
+                for context_chunk in graph_state.agent_state.context
+            ],
+            "context_token_count": sum(
+                context_chunk.token_count
+                for context_chunk in graph_state.agent_state.context
+            ),
+            "retrieval_strategy": (
+                graph_state.agent_state.retrieval_strategy.value
+                if graph_state.agent_state.retrieval_strategy
+                else RetrievalStrategy.BM25.value
+            ),
             "checkpoint_count": len(graph_state.checkpoints),
             "context_chunks": len(graph_state.agent_state.context),
             "citation_count": len(graph_state.agent_state.citations),

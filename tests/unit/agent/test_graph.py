@@ -394,6 +394,10 @@ def test_stream_agent_runtime_graph_yields_tokens_and_completed_event(
     assert events[-1].data["answer"] == (
         "The incident response policy content was found [1]."
     )
+    assert events[-1].data["retrieval_strategy"] == "bm25"
+    assert events[-1].data["context_token_count"] > 0
+    assert len(events[-1].data["citations"]) == 1
+    assert len(events[-1].data["context"]) == 1
     assert events[-1].data["checkpoint_count"] == 8
     assert len(captured_llm_requests) == 1
     assert captured_llm_requests[0].metadata["tenant_id"] == "tenant-a"
