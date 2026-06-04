@@ -7,7 +7,12 @@ from pydantic import Field
 
 from agentic_rag.shared.schemas.auth import AuthContext
 from agentic_rag.shared.schemas.common import APIModel, Citation, JsonObject, ORMModel
-from agentic_rag.shared.schemas.retrieval import CandidateChunk, ContextChunk, RetrievalStrategy
+from agentic_rag.shared.schemas.retrieval import (
+    CandidateChunk,
+    ContextChunk,
+    RetrievalFilters,
+    RetrievalStrategy,
+)
 
 
 class AgentRunStatus(StrEnum):
@@ -121,8 +126,13 @@ class AgentCheckpoint(APIModel):
 class AgentGraphState(APIModel):
     agent_state: AgentStateModel
     limits: AgentLimits = Field(default_factory=AgentLimits)
+    retrieval_filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
+    retrieval_limit: int = Field(default=20, ge=1, le=200)
+    max_context_chunks: int = Field(default=12, ge=1, le=50)
+    max_context_tokens: int = Field(default=6000, ge=500)
     checkpoints: list[AgentCheckpoint] = Field(default_factory=list)
     status: AgentRunStatus = AgentRunStatus.RUNNING
     stop_reason: str | None = None
     current_time: datetime | None = None
     db: Any | None = Field(default=None, exclude=True)
+    search_client: Any | None = Field(default=None, exclude=True)

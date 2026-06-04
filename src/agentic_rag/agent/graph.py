@@ -8,6 +8,9 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from agentic_rag.agent.runtime import record_agent_step, start_agent_state
+from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.retrieval.bm25_search import search_bm25_chunks
+from agentic_rag.retrieval.context_builder import build_context
 from agentic_rag.shared.db.crud.agent_runs import (
     create_agent_run,
     is_agent_run_cancelled,
@@ -23,7 +26,7 @@ from agentic_rag.shared.schemas.agent import (
     AgentStateModel,
 )
 from agentic_rag.shared.schemas.auth import AuthContext
-from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
+from agentic_rag.shared.schemas.retrieval import ContextBuildRequest, RetrievalFilters, RetrievalStrategy
 
 
 logger = logging.getLogger(__name__)
@@ -107,6 +110,7 @@ def classify_intent_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
         "db": graph_state.db,
+        "search_client": graph_state.search_client,
     }
 
 
@@ -147,6 +151,7 @@ def rewrite_query_node(graph_state: AgentGraphState) -> dict[str, Any]:
                 "stop_reason": "Agent run was cancelled.",
                 "current_time": graph_state.current_time,
                 "db": graph_state.db,
+                "search_client": graph_state.search_client,
             }
 
     logger.info(
@@ -180,6 +185,7 @@ def rewrite_query_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
         "db": graph_state.db,
+        "search_client": graph_state.search_client,
     }
 
 
@@ -220,6 +226,7 @@ def plan_filters_node(graph_state: AgentGraphState) -> dict[str, Any]:
                 "stop_reason": "Agent run was cancelled.",
                 "current_time": graph_state.current_time,
                 "db": graph_state.db,
+                "search_client": graph_state.search_client,
             }
 
     logger.info(
@@ -254,6 +261,7 @@ def plan_filters_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
         "db": graph_state.db,
+        "search_client": graph_state.search_client,
     }
 
 
@@ -296,6 +304,7 @@ def select_retrieval_strategy_node(graph_state: AgentGraphState) -> dict[str, An
                 "stop_reason": "Agent run was cancelled.",
                 "current_time": graph_state.current_time,
                 "db": graph_state.db,
+                "search_client": graph_state.search_client,
             }
 
     logger.info(
@@ -329,6 +338,190 @@ def select_retrieval_strategy_node(graph_state: AgentGraphState) -> dict[str, An
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
         "db": graph_state.db,
+        "search_client": graph_state.search_client,
+    }
+
+
+def bm25_search_node(graph_state: AgentGraphState) -> dict[str, Any]:
+    if graph_state.status != AgentRunStatus.RUNNING:
+        return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before BM25 retrieval "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.BM25_SEARCH.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.BM25_SEARCH.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+                "search_client": graph_state.search_client,
+            }
+
+    logger.info(
+        f"[AgentGraph] Running BM25 retrieval "
+        f"agent_run_id={graph_state.agent_state.agent_run_id} "
+        f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+    )
+
+    # Search only through the authorized retrieval service.
+    agent_state = graph_state.agent_state.model_copy(deep=True)
+    query_text = agent_state.rewritten_query or agent_state.query
+    user_context = UserContext(
+        id=agent_state.auth.user_id,
+        customer_id=agent_state.auth.tenant_id,
+        tenant_id=agent_state.auth.tenant_id,
+        workspace_id=agent_state.auth.workspace_id,
+        roles=agent_state.auth.roles,
+        group_ids=agent_state.auth.group_ids,
+        scopes=agent_state.auth.scopes,
+        acl_version=agent_state.auth.acl_version,
+    )
+    retrieval_response = search_bm25_chunks(
+        user_context=user_context,
+        query=query_text,
+        filters=graph_state.retrieval_filters,
+        limit=graph_state.retrieval_limit,
+        search_client=graph_state.search_client,
+    )
+    agent_state.retrieval_strategy = retrieval_response.strategy
+    agent_state.retrieved_candidates = retrieval_response.candidates
+    agent_state.authorized_chunks = retrieval_response.candidates
+
+    # Record the node through the runtime guardrails.
+    step_result = record_agent_step(
+        state=agent_state,
+        node_name=AgentNodeName.BM25_SEARCH,
+        limits=graph_state.limits,
+        now=graph_state.current_time,
+    )
+
+    status = AgentRunStatus.RUNNING
+    stop_reason = None
+    if step_result.decision.should_stop:
+        status = step_result.decision.status
+        stop_reason = step_result.decision.reason
+
+    return {
+        "agent_state": step_result.state,
+        "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+        "status": status,
+        "stop_reason": stop_reason,
+        "current_time": graph_state.current_time,
+        "db": graph_state.db,
+        "search_client": graph_state.search_client,
+    }
+
+
+def build_context_node(graph_state: AgentGraphState) -> dict[str, Any]:
+    if graph_state.status != AgentRunStatus.RUNNING:
+        return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before context building "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.BUILD_CONTEXT.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.BUILD_CONTEXT.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+                "search_client": graph_state.search_client,
+            }
+
+    logger.info(
+        f"[AgentGraph] Building retrieval context "
+        f"agent_run_id={graph_state.agent_state.agent_run_id} "
+        f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+    )
+
+    # Build context only from authorized retrieval candidates.
+    agent_state = graph_state.agent_state.model_copy(deep=True)
+    query_text = agent_state.rewritten_query or agent_state.query
+    context_response = build_context(
+        ContextBuildRequest(
+            query=query_text,
+            chunks=agent_state.authorized_chunks,
+            max_context_chunks=graph_state.max_context_chunks,
+            max_tokens=graph_state.max_context_tokens,
+        )
+    )
+    agent_state.context = context_response.context
+    agent_state.citations = [
+        context_chunk.citation
+        for context_chunk in context_response.context
+    ]
+
+    # Record the node through the runtime guardrails.
+    step_result = record_agent_step(
+        state=agent_state,
+        node_name=AgentNodeName.BUILD_CONTEXT,
+        limits=graph_state.limits,
+        now=graph_state.current_time,
+    )
+
+    status = AgentRunStatus.RUNNING
+    stop_reason = None
+    if step_result.decision.should_stop:
+        status = step_result.decision.status
+        stop_reason = step_result.decision.reason
+
+    return {
+        "agent_state": step_result.state,
+        "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+        "status": status,
+        "stop_reason": stop_reason,
+        "current_time": graph_state.current_time,
+        "db": graph_state.db,
+        "search_client": graph_state.search_client,
     }
 
 
@@ -340,11 +533,15 @@ def build_agent_runtime_graph():
     graph.add_node(AgentNodeName.REWRITE_QUERY.value, rewrite_query_node)
     graph.add_node(AgentNodeName.PLAN_FILTERS.value, plan_filters_node)
     graph.add_node(AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value, select_retrieval_strategy_node)
+    graph.add_node(AgentNodeName.BM25_SEARCH.value, bm25_search_node)
+    graph.add_node(AgentNodeName.BUILD_CONTEXT.value, build_context_node)
     graph.add_edge(START, AgentNodeName.CLASSIFY_INTENT.value)
     graph.add_edge(AgentNodeName.CLASSIFY_INTENT.value, AgentNodeName.REWRITE_QUERY.value)
     graph.add_edge(AgentNodeName.REWRITE_QUERY.value, AgentNodeName.PLAN_FILTERS.value)
     graph.add_edge(AgentNodeName.PLAN_FILTERS.value, AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value)
-    graph.add_edge(AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value, END)
+    graph.add_edge(AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value, AgentNodeName.BM25_SEARCH.value)
+    graph.add_edge(AgentNodeName.BM25_SEARCH.value, AgentNodeName.BUILD_CONTEXT.value)
+    graph.add_edge(AgentNodeName.BUILD_CONTEXT.value, END)
 
     return graph.compile()
 
@@ -355,10 +552,16 @@ def run_agent_runtime_graph(
     auth: AuthContext,
     query: str,
     limits: AgentLimits | None = None,
+    retrieval_filters: RetrievalFilters | None = None,
+    retrieval_limit: int = 20,
+    max_context_chunks: int = 12,
+    max_context_tokens: int = 6000,
     now: datetime | None = None,
     db: Session | None = None,
+    search_client: Any | None = None,
 ) -> AgentGraphRunResult:
     runtime_limits = limits or AgentLimits()
+    runtime_filters = retrieval_filters or RetrievalFilters()
 
     # Use one UTC clock to initialize the graph run.
     current_time = now or datetime.now(timezone.utc)
@@ -391,8 +594,13 @@ def run_agent_runtime_graph(
     graph_state = AgentGraphState(
         agent_state=agent_state,
         limits=runtime_limits,
+        retrieval_filters=runtime_filters,
+        retrieval_limit=retrieval_limit,
+        max_context_chunks=max_context_chunks,
+        max_context_tokens=max_context_tokens,
         current_time=current_time,
         db=db,
+        search_client=search_client,
     )
 
     compiled_graph = build_agent_runtime_graph()
