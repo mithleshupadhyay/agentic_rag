@@ -767,6 +767,12 @@ Prometheus scrapes the API at `api:8000` inside the Compose network. Host
 browsers still reach Prometheus and Grafana through the published
 `PROMETHEUS_PORT` and `GRAFANA_PORT` values.
 
+`make docker-smoke-monitoring` runs a local Compose smoke check through
+`scripts/docker-smoke-monitoring.sh`. It validates Prometheus configuration and
+alert loading with `promtool`, checks Prometheus readiness through the Compose
+network, verifies Grafana datasource/dashboard provisioning files, and checks the
+Grafana health API.
+
 Current answer verification is deterministic. Synthesized answers must cite
 returned context using bracket numbers such as `[1]`; the verifier rejects
 answers with missing citations or citations that do not map to the returned

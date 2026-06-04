@@ -5,7 +5,7 @@ DOCKER_COMPOSE_FILE ?= docker-compose.yml
 DOCKER_PROJECT ?= agentic-rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-kafka-producer docker-smoke-kafka-consumer
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-kafka-producer docker-smoke-kafka-consumer docker-smoke-monitoring
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -28,6 +28,7 @@ help:
 	@printf '%s\n' "  make docker-smoke-embedding-worker Check embedding worker container imports and DB connection"
 	@printf '%s\n' "  make docker-smoke-kafka-producer Publish one retry event to local Kafka"
 	@printf '%s\n' "  make docker-smoke-kafka-consumer Consume one retry event and complete an ingestion job"
+	@printf '%s\n' "  make docker-smoke-monitoring Check Prometheus rules and Grafana provisioning"
 
 test:
 	poetry run pytest -vv
@@ -95,3 +96,6 @@ docker-smoke-kafka-producer: ensure-env
 
 docker-smoke-kafka-consumer: ensure-env
 	ENV_FILE="$(ENV_FILE)" DOCKER_COMPOSE_FILE="$(DOCKER_COMPOSE_FILE)" DOCKER_PROJECT="$(DOCKER_PROJECT)" ./scripts/docker-smoke-kafka-consumer.sh
+
+docker-smoke-monitoring: ensure-env
+	ENV_FILE="$(ENV_FILE)" DOCKER_COMPOSE_FILE="$(DOCKER_COMPOSE_FILE)" DOCKER_PROJECT="$(DOCKER_PROJECT)" ./scripts/docker-smoke-monitoring.sh

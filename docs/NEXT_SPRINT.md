@@ -19,7 +19,7 @@ retrieval quality, and production operations.
 | `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, Redis, MinIO, OpenSearch, Kafka with topic provisioning, migrations, seed, ingestion worker, indexing worker, embedding worker, Prometheus, and Grafana with explicit service-level environment variables. | Add profiles for lightweight API-only and full ingestion stacks. | High |
 | `.env.template` | Documents local host defaults for API, auth, database, Redis, Kafka, object storage, OpenSearch, LLM, worker, agent, and monitoring settings. | Keep host-local defaults separate from Docker Compose service-name routing. | Medium |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
-| `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, Kafka producer, and Kafka consumer Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
+| `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, Kafka producer, Kafka consumer, and monitoring Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
 | `monitoring/prometheus.yml` | Local Prometheus scrape and rule-loading configuration for the Compose stack. | Add scrape jobs for workers, OpenSearch, Kafka, PostgreSQL, Redis, and object storage when safe exporters are introduced. | Medium |
 | `monitoring/grafana_datasource.yml` | Local Grafana datasource provisioning for Prometheus. | Add additional datasources only when tracing or log backends are added locally. | Medium |
 | `monitoring/grafana_dashboard.yml` | Local Grafana dashboard provider for the query dashboard file. | Add more dashboard providers only when dashboard ownership needs to split by domain. | Low |
@@ -29,6 +29,7 @@ retrieval quality, and production operations.
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add more focused Docker smoke scripts for OpenSearch, pgvector retrieval, and full upload-to-query flow. | Medium |
+| `scripts/docker-smoke-monitoring.sh` | Host-side Docker smoke wrapper that validates Prometheus config/rule loading, Prometheus readiness, Grafana datasource/dashboard provisioning files, and Grafana health through the local Compose stack. | Add stricter dashboard API checks when Grafana auth handling is settled for local automation. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
 | `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle, query latency, and LLM provider circuit-breaker health metrics. | Add dashboard-oriented metrics for retrieval, ingestion, indexing, LLM cost, and worker queues as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
@@ -116,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
 | 2026-06-04 | Added LLM provider health dashboard panels and Prometheus alert rules. |
 | 2026-06-04 | Wired agent runtime streaming into the `/query/stream` API contract. |
 | 2026-06-04 | Added agent runtime streaming events for graph steps and LLM answer tokens. |
@@ -143,6 +145,5 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
-| 2 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |
-| 3 | Add cache lookup and answer confidence calculation to query orchestration. |
+| 1 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |
+| 2 | Add cache lookup and answer confidence calculation to query orchestration. |
