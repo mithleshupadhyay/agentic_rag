@@ -5,8 +5,14 @@ from typing import Any
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy.orm import Session
 
 from agentic_rag.agent.runtime import record_agent_step, start_agent_state
+from agentic_rag.shared.db.crud.agent_runs import (
+    create_agent_run,
+    record_agent_run_step,
+    save_agent_checkpoint,
+)
 from agentic_rag.shared.schemas.agent import (
     AgentCheckpoint,
     AgentGraphState,
@@ -203,6 +209,7 @@ def run_agent_runtime_graph(
     query: str,
     limits: AgentLimits | None = None,
     now: datetime | None = None,
+    db: Session | None = None,
 ) -> AgentGraphRunResult:
     runtime_limits = limits or AgentLimits()
 
@@ -217,6 +224,15 @@ def run_agent_runtime_graph(
         f"[AgentGraph] Starting agent runtime graph "
         f"agent_run_id={agent_run_id} tenant_id={auth.tenant_id} user_id={auth.user_id}"
     )
+
+    if db is not None:
+        create_agent_run(
+            db=db,
+            agent_run_id=agent_run_id,
+            auth=auth,
+            query=query,
+            limits=runtime_limits,
+        )
 
     agent_state = start_agent_state(
         agent_run_id=agent_run_id,
@@ -234,6 +250,37 @@ def run_agent_runtime_graph(
     compiled_graph = build_agent_runtime_graph()
     raw_result = compiled_graph.invoke(graph_state)
     completed_graph_state = AgentGraphState.model_validate(raw_result)
+
+    if db is not None:
+        for checkpoint in completed_graph_state.checkpoints:
+            visited_nodes = checkpoint.state.get("visited_nodes", [])
+            node_name = checkpoint.checkpoint_key
+            if visited_nodes:
+                node_name = visited_nodes[-1]
+
+            step_number = checkpoint.state.get("step_count")
+            if not isinstance(step_number, int):
+                step_number = len(visited_nodes) if visited_nodes else 0
+
+            step_status = "completed"
+            if checkpoint == completed_graph_state.checkpoints[-1]:
+                if completed_graph_state.status != AgentRunStatus.RUNNING:
+                    step_status = completed_graph_state.status.value
+
+            record_agent_run_step(
+                db=db,
+                agent_run_id=agent_run_id,
+                tenant_id=auth.tenant_id,
+                node_name=node_name,
+                step_number=step_number,
+                status=step_status,
+            )
+            save_agent_checkpoint(
+                db=db,
+                agent_run_id=agent_run_id,
+                tenant_id=auth.tenant_id,
+                checkpoint=checkpoint,
+            )
 
     logger.info(
         f"[AgentGraph] Agent runtime graph finished "

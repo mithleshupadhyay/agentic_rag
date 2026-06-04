@@ -1,8 +1,16 @@
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from agentic_rag.agent.graph import build_agent_runtime_graph, run_agent_runtime_graph
 from agentic_rag.agent.runtime import SAFE_FALLBACK_ANSWER, start_agent_state
+from agentic_rag.shared.db.base import Base
+from agentic_rag.shared.db.crud.agent_runs import get_agent_run
+from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.schemas.agent import (
     AgentGraphState,
     AgentLimits,
@@ -11,6 +19,15 @@ from agentic_rag.shared.schemas.agent import (
 )
 from agentic_rag.shared.schemas.auth import AuthContext
 from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
+
+
+@pytest.fixture()
+def db() -> Iterator[Session]:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        yield session
 
 
 def test_run_agent_runtime_graph_reaches_retrieval_boundary() -> None:
@@ -106,3 +123,98 @@ def test_build_agent_runtime_graph_invokes_existing_state() -> None:
     assert completed_graph_state.status == AgentRunStatus.RUNNING
     assert completed_graph_state.agent_state.step_count == 4
     assert len(completed_graph_state.checkpoints) == 4
+
+
+def test_run_agent_runtime_graph_persists_steps_and_checkpoints(db: Session) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    agent_run_id = uuid4()
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    result = run_agent_runtime_graph(
+        agent_run_id=agent_run_id,
+        auth=AuthContext(
+            user_id="user-1",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+        ),
+        query="Find the incident response policy",
+        now=now,
+        db=db,
+    )
+    stored = get_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert result.status == AgentRunStatus.RUNNING
+    assert stored is not None
+    assert stored.status == AgentRunStatus.RUNNING.value
+    assert stored.tenant_id == "tenant-a"
+    assert stored.workspace_id == "workspace-a"
+    assert stored.user_id == "user-1"
+    assert stored.query_text == "Find the incident response policy"
+    assert stored.total_steps == 4
+    assert stored.total_tool_calls == 0
+    assert [step.node_name for step in stored.steps] == result.state.visited_nodes
+    assert [step.status for step in stored.steps] == [
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+    ]
+    assert [checkpoint.checkpoint_key for checkpoint in stored.checkpoints] == [
+        "step-0001-classify_intent",
+        "step-0002-rewrite_query",
+        "step-0003-plan_filters",
+        "step-0004-select_retrieval_strategy",
+    ]
+    assert stored.checkpoints[-1].state["retrieval_strategy"] == RetrievalStrategy.BM25
+
+
+def test_run_agent_runtime_graph_persists_guardrail_stop(db: Session) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    agent_run_id = uuid4()
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    result = run_agent_runtime_graph(
+        agent_run_id=agent_run_id,
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+        limits=AgentLimits(max_steps=1),
+        now=now,
+        db=db,
+    )
+    stored = get_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert result.status == AgentRunStatus.HANDOFF_REQUIRED
+    assert stored is not None
+    assert stored.status == AgentRunStatus.HANDOFF_REQUIRED.value
+    assert stored.completed_at is not None
+    assert stored.total_steps == 2
+    assert len(stored.steps) == 2
+    assert len(stored.checkpoints) == 2
+    assert stored.steps[-1].status == AgentRunStatus.HANDOFF_REQUIRED.value
+    assert stored.checkpoints[-1].state["final_answer"] == SAFE_FALLBACK_ANSWER

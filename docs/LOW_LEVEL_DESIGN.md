@@ -982,9 +982,15 @@ streaming events yet.
 The local persistence layer now has tenant-scoped `agent_runs`, `agent_steps`,
 and `agent_checkpoints` tables. The CRUD layer can create an agent run, record a
 node step, save a serialized checkpoint, and fetch a run with its steps and
-checkpoints. This storage slice is intentionally not wired into API endpoints or
-graph execution yet; the next agent slice should persist checkpoints from the
-graph runner and then add cancellation checks before retrieval tools are wired.
+checkpoints.
+
+The graph runner can now persist execution when a database session is provided.
+It creates the tenant-scoped agent run before invoking LangGraph, records each
+visited graph node as an agent step, saves each runtime checkpoint, and updates
+the persisted run status when guardrails stop the graph with handoff, timeout,
+failure, or cancellation. This graph still intentionally stops at the retrieval
+boundary. It does not add internal API endpoints, retrieval tool execution, LLM
+calls, cancellation checks, or streaming events yet.
 
 ### LLM Gateway
 
