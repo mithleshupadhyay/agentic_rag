@@ -23,8 +23,8 @@ retrieval quality, and production operations.
 | `monitoring/prometheus.yml` | Local Prometheus scrape and rule-loading configuration for the Compose stack. | Add scrape jobs for workers, OpenSearch, Kafka, PostgreSQL, Redis, and object storage when safe exporters are introduced. | Medium |
 | `monitoring/grafana_datasource.yml` | Local Grafana datasource provisioning for Prometheus. | Add additional datasources only when tracing or log backends are added locally. | Medium |
 | `monitoring/grafana_dashboard.yml` | Local Grafana dashboard provider for the query dashboard file. | Add more dashboard providers only when dashboard ownership needs to split by domain. | Low |
-| `monitoring/query_dashboard.json` | Grafana dashboard for query lifecycle rate, query failure rate, and p95/p99 query latency. | Add panels for retrieval latency, LLM provider health, LLM cost, ingestion throughput, indexing lag, and worker queue health as metrics land. | Medium |
-| `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate and p95 query latency. | Add alert rules for worker failures, DLQ growth, Kafka lag, provider circuit state, and budget anomalies as those metrics land. | Medium |
+| `monitoring/query_dashboard.json` | Grafana dashboard for query lifecycle rate, query failure rate, p95/p99 query latency, LLM provider circuit state, provider failure count, and retry-after delay. | Add panels for retrieval latency, LLM cost, ingestion throughput, indexing lag, and worker queue health as metrics land. | Medium |
+| `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate, p95 query latency, open LLM provider circuits, sustained provider failures, and high retry-after delay. | Add alert rules for worker failures, DLQ growth, Kafka lag, and budget anomalies as those metrics land. | Medium |
 | `scripts/smoke_embedding_worker.py` | Local Docker smoke check that verifies the embedding-worker container can import the worker module and reach the configured database without invoking an external embedding provider. | Add a PostgreSQL/pgvector embedding smoke when test-safe local embeddings are available. | Medium |
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
@@ -116,6 +116,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added LLM provider health dashboard panels and Prometheus alert rules. |
 | 2026-06-04 | Wired agent runtime streaming into the `/query/stream` API contract. |
 | 2026-06-04 | Added agent runtime streaming events for graph steps and LLM answer tokens. |
 | 2026-06-04 | Added LLM gateway token streaming contract through LiteLLM. |
@@ -142,7 +143,6 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add LLM provider health dashboard panels and alert rules from the circuit-breaker metrics. |
-| 2 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
-| 3 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |
-| 4 | Add cache lookup and answer confidence calculation to query orchestration. |
+| 1 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
+| 2 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |
+| 3 | Add cache lookup and answer confidence calculation to query orchestration. |

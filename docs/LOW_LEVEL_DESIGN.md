@@ -749,9 +749,11 @@ monitoring/query_dashboard.json
 monitoring/query_alerts.yml
 ```
 
-The dashboard covers query lifecycle rate, query failure rate, and p95/p99
-query latency. The alert rules cover sustained query failure rate and sustained
-p95 query latency.
+The dashboard covers query lifecycle rate, query failure rate, p95/p99 query
+latency, LLM provider circuit state, consecutive provider failure count, and
+provider retry-after delay. The alert rules cover sustained query failure rate,
+sustained p95 query latency, open LLM provider circuits, sustained provider
+failures, and high provider retry-after delay.
 
 Local Docker Compose monitoring is provisioned through:
 

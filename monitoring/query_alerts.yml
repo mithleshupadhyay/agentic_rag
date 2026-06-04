@@ -30,3 +30,45 @@ groups:
         annotations:
           summary: Agentic RAG query p95 latency is high
           description: Query p95 latency has stayed above 2.5 seconds for 10 minutes.
+
+      - alert: AgenticRagLLMProviderCircuitOpen
+        expr: |
+          max by (provider, model) (
+            agentic_rag_llm_provider_circuit_state{state="open"}
+          )
+          == 1
+        for: 2m
+        labels:
+          severity: critical
+          service: llm-gateway
+        annotations:
+          summary: Agentic RAG LLM provider circuit is open
+          description: LLM provider {{ $labels.provider }} model {{ $labels.model }} circuit has stayed open for 2 minutes.
+
+      - alert: AgenticRagLLMProviderSustainedFailures
+        expr: |
+          max by (provider, model) (
+            agentic_rag_llm_provider_failure_count
+          )
+          >= 3
+        for: 5m
+        labels:
+          severity: warning
+          service: llm-gateway
+        annotations:
+          summary: Agentic RAG LLM provider has sustained failures
+          description: LLM provider {{ $labels.provider }} model {{ $labels.model }} has 3 or more consecutive circuit-breaker failures for 5 minutes.
+
+      - alert: AgenticRagLLMProviderHighRetryAfter
+        expr: |
+          max by (provider, model) (
+            agentic_rag_llm_provider_retry_after_seconds
+          )
+          > 30
+        for: 2m
+        labels:
+          severity: warning
+          service: llm-gateway
+        annotations:
+          summary: Agentic RAG LLM provider retry-after is high
+          description: LLM provider {{ $labels.provider }} model {{ $labels.model }} retry-after has stayed above 30 seconds for 2 minutes.
