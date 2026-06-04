@@ -1,15 +1,16 @@
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from agentic_rag.agent import graph as agent_graph
 from agentic_rag.agent.graph import build_agent_runtime_graph, run_agent_runtime_graph
 from agentic_rag.agent.runtime import SAFE_FALLBACK_ANSWER, start_agent_state
 from agentic_rag.shared.db.base import Base
-from agentic_rag.shared.db.crud.agent_runs import get_agent_run
+from agentic_rag.shared.db.crud.agent_runs import cancel_agent_run, get_agent_run
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.schemas.agent import (
     AgentGraphState,
@@ -218,3 +219,85 @@ def test_run_agent_runtime_graph_persists_guardrail_stop(db: Session) -> None:
     assert len(stored.checkpoints) == 2
     assert stored.steps[-1].status == AgentRunStatus.HANDOFF_REQUIRED.value
     assert stored.checkpoints[-1].state["final_answer"] == SAFE_FALLBACK_ANSWER
+
+
+def test_run_agent_runtime_graph_stops_when_persisted_run_is_cancelled(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    agent_run_id = uuid4()
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    actual_cancelled_check = agent_graph.is_agent_run_cancelled
+    cancellation_check_count = {"value": 0}
+
+    def cancel_after_first_node_check(
+        *,
+        db: Session,
+        agent_run_id: UUID,
+        tenant_id: str,
+    ) -> bool:
+        cancellation_check_count["value"] += 1
+        is_cancelled = actual_cancelled_check(
+            db=db,
+            agent_run_id=agent_run_id,
+            tenant_id=tenant_id,
+        )
+        if cancellation_check_count["value"] == 1:
+            cancel_agent_run(
+                db=db,
+                agent_run_id=agent_run_id,
+                tenant_id=tenant_id,
+            )
+        return is_cancelled
+
+    monkeypatch.setattr(
+        agent_graph,
+        "is_agent_run_cancelled",
+        cancel_after_first_node_check,
+    )
+
+    result = run_agent_runtime_graph(
+        agent_run_id=agent_run_id,
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+        now=now,
+        db=db,
+    )
+    stored = get_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert result.status == AgentRunStatus.CANCELLED
+    assert result.stop_reason == "Agent run was cancelled."
+    assert result.state.intent == "retrieve_and_answer"
+    assert result.state.rewritten_query is None
+    assert result.state.visited_nodes == [
+        AgentNodeName.CLASSIFY_INTENT.value,
+        AgentNodeName.REWRITE_QUERY.value,
+    ]
+    assert len(result.checkpoints) == 2
+    assert cancellation_check_count["value"] == 2
+    assert stored is not None
+    assert stored.status == AgentRunStatus.CANCELLED.value
+    assert stored.completed_at is not None
+    assert stored.total_steps == 2
+    assert len(stored.steps) == 2
+    assert len(stored.checkpoints) == 2
+    assert [step.status for step in stored.steps] == [
+        "completed",
+        AgentRunStatus.CANCELLED.value,
+    ]
+    assert stored.checkpoints[-1].checkpoint_key == "step-0002-rewrite_query"

@@ -125,3 +125,4 @@ class AgentGraphState(APIModel):
     status: AgentRunStatus = AgentRunStatus.RUNNING
     stop_reason: str | None = None
     current_time: datetime | None = None
+    db: Any | None = Field(default=None, exclude=True)

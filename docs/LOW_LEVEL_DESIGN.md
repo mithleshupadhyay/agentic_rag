@@ -976,8 +976,7 @@ classification, query rewrite, filter planning, and retrieval strategy
 selection, records a checkpoint after each node, and stops immediately if the
 existing runtime guardrails return a timeout or handoff decision. This graph
 intentionally stops at the retrieval boundary. It does not add internal API
-endpoints, retrieval tool execution, LLM calls, cancellation wiring, or
-streaming events yet.
+endpoints, retrieval tool execution, LLM calls, or streaming events yet.
 
 The local persistence layer now has tenant-scoped `agent_runs`, `agent_steps`,
 and `agent_checkpoints` tables. The CRUD layer can create an agent run, record a
@@ -988,9 +987,14 @@ The graph runner can now persist execution when a database session is provided.
 It creates the tenant-scoped agent run before invoking LangGraph, records each
 visited graph node as an agent step, saves each runtime checkpoint, and updates
 the persisted run status when guardrails stop the graph with handoff, timeout,
-failure, or cancellation. This graph still intentionally stops at the retrieval
-boundary. It does not add internal API endpoints, retrieval tool execution, LLM
-calls, cancellation checks, or streaming events yet.
+failure, or cancellation.
+
+The graph also checks the persisted agent run status before each node starts
+when a database session is available. If another flow has cancelled the run, the
+graph records a final cancellation checkpoint for that node, stops with
+`cancelled`, and persists the cancelled step status. This graph still
+intentionally stops at the retrieval boundary. It does not add internal API
+endpoints, retrieval tool execution, LLM calls, or streaming events yet.
 
 ### LLM Gateway
 

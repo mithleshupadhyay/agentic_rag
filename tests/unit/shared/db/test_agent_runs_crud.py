@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.agent_runs import (
+    cancel_agent_run,
     create_agent_run,
     get_agent_run,
+    is_agent_run_cancelled,
     record_agent_run_step,
     save_agent_checkpoint,
 )
@@ -172,6 +174,83 @@ def test_agent_run_crud_is_tenant_scoped(db: Session) -> None:
     assert tenant_b_checkpoint is None
     assert db.query(AgentStep).count() == 0
     assert db.query(AgentCheckpointModel).count() == 0
+
+
+def test_cancel_agent_run_marks_active_run_cancelled(db: Session) -> None:
+    agent_run_id = uuid4()
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    create_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+    )
+
+    assert is_agent_run_cancelled(db, agent_run_id, "tenant-a") is False
+    assert is_agent_run_cancelled(db, agent_run_id, "tenant-b") is False
+
+    cancelled = cancel_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert cancelled is not None
+    assert cancelled.status == AgentRunStatus.CANCELLED.value
+    assert cancelled.completed_at is not None
+    assert is_agent_run_cancelled(db, agent_run_id, "tenant-a") is True
+
+
+def test_cancel_agent_run_rejects_terminal_status(db: Session) -> None:
+    agent_run_id = uuid4()
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    create_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+    )
+    record_agent_run_step(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+        node_name=AgentNodeName.HUMAN_HANDOFF,
+        step_number=1,
+        status=AgentRunStatus.HANDOFF_REQUIRED.value,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        cancel_agent_run(
+            db=db,
+            agent_run_id=agent_run_id,
+            tenant_id="tenant-a",
+        )
+
+    stored = get_agent_run(db, agent_run_id, "tenant-a")
+
+    assert exc_info.value.status_code == 409
+    assert stored is not None
+    assert stored.status == AgentRunStatus.HANDOFF_REQUIRED.value
 
 
 def test_save_agent_checkpoint_rejects_mismatched_run_id(db: Session) -> None:

@@ -77,6 +77,92 @@ def create_agent_run(
         )
 
 
+def cancel_agent_run(
+    db: Session,
+    agent_run_id: UUID,
+    tenant_id: str,
+) -> Optional[AgentRun]:
+    logger.info(f"[DB] Cancelling agent run {agent_run_id} tenant={tenant_id}")
+    agent_run = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.id == agent_run_id,
+            AgentRun.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    if not agent_run:
+        logger.warning(
+            f"[DB] Agent run {agent_run_id} not found for cancellation "
+            f"tenant={tenant_id}"
+        )
+        return None
+
+    # Only active runs can move to cancelled.
+    if agent_run.status not in {
+        AgentRunStatus.QUEUED.value,
+        AgentRunStatus.RUNNING.value,
+    }:
+        logger.warning(
+            f"[DB] Agent run {agent_run_id} cancellation rejected "
+            f"tenant={tenant_id} status={agent_run.status}"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agent run cannot be cancelled from status {agent_run.status}.",
+        )
+
+    agent_run.status = AgentRunStatus.CANCELLED.value
+    agent_run.completed_at = datetime.now(timezone.utc)
+
+    try:
+        db.commit()
+        db.refresh(agent_run)
+        logger.info(f"[DB] Agent run {agent_run.id} cancelled")
+        return agent_run
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(f"[DB] Failed to cancel agent run {agent_run_id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during agent run cancellation.",
+        )
+
+
+def is_agent_run_cancelled(
+    db: Session,
+    agent_run_id: UUID,
+    tenant_id: str,
+) -> bool:
+    logger.info(f"[DB] Checking agent run cancellation {agent_run_id} tenant={tenant_id}")
+
+    # Refresh local ORM state before reading a cancellation written by another flow.
+    db.expire_all()
+
+    agent_run = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.id == agent_run_id,
+            AgentRun.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    if not agent_run:
+        logger.warning(
+            f"[DB] Agent run {agent_run_id} not found for cancellation check "
+            f"tenant={tenant_id}"
+        )
+        return False
+
+    is_cancelled = agent_run.status == AgentRunStatus.CANCELLED.value
+    logger.info(
+        f"[DB] Agent run cancellation check run={agent_run_id} "
+        f"tenant={tenant_id} cancelled={is_cancelled}"
+    )
+    return is_cancelled
+
+
 def record_agent_run_step(
     db: Session,
     agent_run_id: UUID,

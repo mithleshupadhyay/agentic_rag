@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from agentic_rag.agent.runtime import record_agent_step, start_agent_state
 from agentic_rag.shared.db.crud.agent_runs import (
     create_agent_run,
+    is_agent_run_cancelled,
     record_agent_run_step,
     save_agent_checkpoint,
 )
@@ -39,6 +40,41 @@ class AgentGraphRunResult:
 def classify_intent_node(graph_state: AgentGraphState) -> dict[str, Any]:
     if graph_state.status != AgentRunStatus.RUNNING:
         return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before intent classification "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.CLASSIFY_INTENT.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.CLASSIFY_INTENT.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+            }
 
     logger.info(
         f"[AgentGraph] Classifying intent "
@@ -70,12 +106,48 @@ def classify_intent_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "status": status,
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
+        "db": graph_state.db,
     }
 
 
 def rewrite_query_node(graph_state: AgentGraphState) -> dict[str, Any]:
     if graph_state.status != AgentRunStatus.RUNNING:
         return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before query rewrite "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.REWRITE_QUERY.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.REWRITE_QUERY.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+            }
 
     logger.info(
         f"[AgentGraph] Rewriting query "
@@ -107,12 +179,48 @@ def rewrite_query_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "status": status,
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
+        "db": graph_state.db,
     }
 
 
 def plan_filters_node(graph_state: AgentGraphState) -> dict[str, Any]:
     if graph_state.status != AgentRunStatus.RUNNING:
         return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before filter planning "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.PLAN_FILTERS.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.PLAN_FILTERS.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+            }
 
     logger.info(
         f"[AgentGraph] Planning filters "
@@ -145,12 +253,50 @@ def plan_filters_node(graph_state: AgentGraphState) -> dict[str, Any]:
         "status": status,
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
+        "db": graph_state.db,
     }
 
 
 def select_retrieval_strategy_node(graph_state: AgentGraphState) -> dict[str, Any]:
     if graph_state.status != AgentRunStatus.RUNNING:
         return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before retrieval strategy selection "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(
+                AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value
+            )
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+            }
 
     logger.info(
         f"[AgentGraph] Selecting retrieval strategy "
@@ -182,6 +328,7 @@ def select_retrieval_strategy_node(graph_state: AgentGraphState) -> dict[str, An
         "status": status,
         "stop_reason": stop_reason,
         "current_time": graph_state.current_time,
+        "db": graph_state.db,
     }
 
 
@@ -245,6 +392,7 @@ def run_agent_runtime_graph(
         agent_state=agent_state,
         limits=runtime_limits,
         current_time=current_time,
+        db=db,
     )
 
     compiled_graph = build_agent_runtime_graph()
