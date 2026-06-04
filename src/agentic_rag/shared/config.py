@@ -179,6 +179,11 @@ class Settings(BaseSettings):
         le=1000,
         validation_alias="BM25_INDEX_BATCH_SIZE",
     )
+    bm25_min_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        validation_alias="BM25_MIN_SCORE",
+    )
     embedding_provider: str = Field(default="litellm", validation_alias="EMBEDDING_PROVIDER")
     embedding_model_name: str = Field(
         default="gemini/gemini-embedding-001",

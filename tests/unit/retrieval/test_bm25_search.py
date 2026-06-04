@@ -105,6 +105,113 @@ def test_search_bm25_chunks_builds_tenant_acl_filters_and_candidates() -> None:
     assert search_body["size"] == 5
 
 
+def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
+    high_score_document_id = uuid4()
+    high_score_chunk_id = uuid4()
+    low_score_document_id = uuid4()
+    low_score_chunk_id = uuid4()
+    search_client = FakeSearchClient(
+        hits=[
+            {
+                "_score": 2.75,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(high_score_document_id),
+                    "chunk_id": str(high_score_chunk_id),
+                    "chunk_index": 1,
+                    "content": "Strong security policy match.",
+                    "token_count": 4,
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+            {
+                "_score": 0.75,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(low_score_document_id),
+                    "chunk_id": str(low_score_chunk_id),
+                    "chunk_index": 2,
+                    "content": "Weak policy match.",
+                    "token_count": 3,
+                    "document_title": "Weak Match",
+                    "source_uri": "upload://weak.md",
+                },
+            },
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    monkeypatch.setattr(
+        "agentic_rag.retrieval.bm25_search.settings.bm25_min_score",
+        2.0,
+    )
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    assert len(response.candidates) == 1
+    assert response.candidates[0].chunk_id == high_score_chunk_id
+    assert response.candidates[0].score == 2.75
+    assert response.candidates[0].citation.title == "Security Policy"
+
+
+def test_search_bm25_chunks_keeps_zero_score_candidates_by_default(monkeypatch) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    search_client = FakeSearchClient(
+        hits=[
+            {
+                "_score": 0.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(chunk_id),
+                    "chunk_index": 1,
+                    "content": "Default threshold keeps this result.",
+                    "token_count": 5,
+                    "document_title": "Default Threshold",
+                    "source_uri": "upload://default.md",
+                },
+            }
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    monkeypatch.setattr(
+        "agentic_rag.retrieval.bm25_search.settings.bm25_min_score",
+        0.0,
+    )
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    assert len(response.candidates) == 1
+    assert response.candidates[0].chunk_id == chunk_id
+    assert response.candidates[0].score == 0.0
+
+
 def test_search_bm25_chunks_uses_admin_acl_clause() -> None:
     search_client = FakeSearchClient()
     user_context = UserContext(

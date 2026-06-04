@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.search.opensearch import OpenSearchClient
+from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.auth import Visibility
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.retrieval import (
@@ -30,7 +31,7 @@ def search_bm25_chunks(
 ) -> RetrievalResponse:
     logger.info(
         f"[Retrieval] BM25 search started tenant={user_context.tenant_id} "
-        f"user={user_context.id} limit={limit}"
+        f"user={user_context.id} limit={limit} min_score={settings.bm25_min_score}"
     )
     started_at = time.perf_counter()
     query_text = query.strip()
@@ -152,12 +153,17 @@ def search_bm25_chunks(
     try:
         hits = search_client.search_chunks_bm25(search_body)
         candidates = []
+        skipped_low_score_count = 0
         for hit in hits:
             source = hit.get("_source", {})
             highlight = hit.get("highlight", {})
             highlighted_content = highlight.get("content") or []
             quote = highlighted_content[0] if highlighted_content else source.get("content")
             score = float(hit.get("_score") or 0.0)
+            if score < settings.bm25_min_score:
+                skipped_low_score_count += 1
+                continue
+
             document_id = UUID(source["document_id"])
             chunk_id = UUID(source["chunk_id"])
 
@@ -194,7 +200,9 @@ def search_bm25_chunks(
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
             f"[Retrieval] BM25 search completed tenant={user_context.tenant_id} "
-            f"user={user_context.id} candidates={len(candidates)} latency_ms={latency_ms}"
+            f"user={user_context.id} candidates={len(candidates)} "
+            f"skipped_low_score={skipped_low_score_count} "
+            f"min_score={settings.bm25_min_score} latency_ms={latency_ms}"
         )
         return RetrievalResponse(
             strategy=RetrievalStrategy.BM25,
