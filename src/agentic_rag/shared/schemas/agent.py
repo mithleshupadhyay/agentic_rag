@@ -84,6 +84,7 @@ class AgentStateModel(APIModel):
     final_answer: str | None = None
     citations: list[Citation] = Field(default_factory=list)
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    replay_metadata: JsonObject = Field(default_factory=dict)
     step_count: int = Field(default=0, ge=0)
     tool_call_count: int = Field(default=0, ge=0)
     visited_nodes: list[str] = Field(default_factory=list)

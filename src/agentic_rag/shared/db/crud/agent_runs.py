@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -135,7 +135,9 @@ def is_agent_run_cancelled(
     agent_run_id: UUID,
     tenant_id: str,
 ) -> bool:
-    logger.info(f"[DB] Checking agent run cancellation {agent_run_id} tenant={tenant_id}")
+    logger.info(
+        f"[DB] Checking agent run cancellation {agent_run_id} tenant={tenant_id}"
+    )
 
     # Refresh local ORM state before reading a cancellation written by another flow.
     db.expire_all()
@@ -172,6 +174,9 @@ def record_agent_run_step(
     status: str = "completed",
     finish_run: bool = False,
     tool_call: Optional[ToolCallRecord] = None,
+    tool_name: Optional[str] = None,
+    tool_input: Optional[dict[str, Any]] = None,
+    tool_output_summary: Optional[str] = None,
     latency_ms: Optional[int] = None,
     error_type: Optional[str] = None,
     error_message: Optional[str] = None,
@@ -198,19 +203,20 @@ def record_agent_run_step(
         )
         return None
 
-    tool_name = None
-    tool_input = {}
+    persisted_tool_name = tool_name
+    persisted_tool_input = tool_input or {}
     if tool_call is not None:
-        tool_name = tool_call.tool_name
-        tool_input = tool_call.arguments
+        persisted_tool_name = tool_call.tool_name
+        persisted_tool_input = tool_call.arguments
 
     db_obj = AgentStep(
         tenant_id=tenant_id,
         agent_run_id=agent_run_id,
         node_name=node_value,
         step_number=step_number,
-        tool_name=tool_name,
-        tool_input=tool_input,
+        tool_name=persisted_tool_name,
+        tool_input=persisted_tool_input,
+        tool_output_summary=tool_output_summary,
         latency_ms=latency_ms,
         status=status,
         error_type=error_type[:128] if error_type else None,
@@ -220,16 +226,12 @@ def record_agent_run_step(
     agent_run.total_steps = max(agent_run.total_steps, step_number)
     if tool_call is not None:
         agent_run.total_tool_calls += 1
-    if (
-        status
-        in {
-            AgentRunStatus.HANDOFF_REQUIRED.value,
-            AgentRunStatus.TIMED_OUT.value,
-            AgentRunStatus.FAILED.value,
-            AgentRunStatus.CANCELLED.value,
-        }
-        or (finish_run and status == AgentRunStatus.COMPLETED.value)
-    ):
+    if status in {
+        AgentRunStatus.HANDOFF_REQUIRED.value,
+        AgentRunStatus.TIMED_OUT.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+    } or (finish_run and status == AgentRunStatus.COMPLETED.value):
         agent_run.status = status
         agent_run.completed_at = datetime.now(timezone.utc)
 
@@ -283,8 +285,7 @@ def save_agent_checkpoint(
     )
     if not agent_run:
         logger.warning(
-            f"[DB] Agent run {agent_run_id} not found for checkpoint "
-            f"tenant={tenant_id}"
+            f"[DB] Agent run {agent_run_id} not found for checkpoint tenant={tenant_id}"
         )
         return None
 
@@ -308,7 +309,9 @@ def save_agent_checkpoint(
 
     except IntegrityError as e:
         db.rollback()
-        logger.exception(f"[DB] Failed to save agent checkpoint run={agent_run_id}: {e}")
+        logger.exception(
+            f"[DB] Failed to save agent checkpoint run={agent_run_id}: {e}"
+        )
         raise HTTPException(
             status_code=400,
             detail="Database error during agent checkpoint creation.",

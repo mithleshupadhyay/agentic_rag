@@ -146,8 +146,14 @@ def test_run_agent_runtime_graph_generates_verified_answer(
     assert len(result.state.authorized_chunks) == 1
     assert len(result.state.context) == 1
     assert len(result.state.citations) == 1
-    assert result.state.draft_answer == "The incident response policy content was found [1]."
-    assert result.state.final_answer == "The incident response policy content was found [1]."
+    assert (
+        result.state.draft_answer
+        == "The incident response policy content was found [1]."
+    )
+    assert (
+        result.state.final_answer
+        == "The incident response policy content was found [1]."
+    )
     assert result.state.confidence_score == 1.0
     assert len(captured_llm_requests) == 1
     assert captured_llm_requests[0].metadata["tenant_id"] == "tenant-a"
@@ -156,7 +162,10 @@ def test_run_agent_runtime_graph_generates_verified_answer(
     assert "Highlighted incident response policy content." in (
         captured_llm_requests[0].messages[1].content
     )
-    assert result.state.context[0].content == "Highlighted incident response policy content."
+    assert (
+        result.state.context[0].content
+        == "Highlighted incident response policy content."
+    )
     assert {"term": {"tenant_id": "tenant-a"}} in filter_clauses
     assert {"term": {"workspace_id": "workspace-a"}} in filter_clauses
     assert {"range": {"acl_version": {"lte": 4}}} in filter_clauses
@@ -219,6 +228,37 @@ def test_run_agent_runtime_graph_returns_checkpoints_for_each_node(
     assert len(result.checkpoints[-1].state["context"]) == 1
     assert result.checkpoints[-1].state["final_answer"] == (
         "The incident response policy content was found [1]."
+    )
+    replay_metadata = result.checkpoints[-1].state["replay_metadata"]
+    assert (
+        replay_metadata[AgentNodeName.BM25_SEARCH.value]["tool_name"] == "bm25_search"
+    )
+    assert (
+        replay_metadata[AgentNodeName.BM25_SEARCH.value]["output"]["candidate_count"]
+        == 1
+    )
+    assert replay_metadata[AgentNodeName.BUILD_CONTEXT.value]["tool_name"] == (
+        "context_builder"
+    )
+    assert (
+        replay_metadata[AgentNodeName.BUILD_CONTEXT.value]["output"][
+            "context_chunk_count"
+        ]
+        == 1
+    )
+    assert replay_metadata[AgentNodeName.GENERATE_ANSWER.value]["tool_name"] == (
+        "llm_gateway"
+    )
+    assert (
+        replay_metadata[AgentNodeName.GENERATE_ANSWER.value]["output"]["llm_model"]
+        == "test-model"
+    )
+    assert replay_metadata[AgentNodeName.VERIFY_GROUNDING.value]["tool_name"] == (
+        "answer_verifier"
+    )
+    assert (
+        replay_metadata[AgentNodeName.VERIFY_GROUNDING.value]["output"]["passed"]
+        is True
     )
 
 
@@ -291,7 +331,9 @@ def test_run_agent_runtime_graph_rejects_ungrounded_generated_answer(
 
     assert result.status == AgentRunStatus.HANDOFF_REQUIRED
     assert result.stop_reason == "Answer did not cite retrieved context."
-    assert result.state.draft_answer == "The incident response policy content was found."
+    assert (
+        result.state.draft_answer == "The incident response policy content was found."
+    )
     assert result.state.final_answer == SAFE_FALLBACK_ANSWER
     assert result.state.handoff_required is True
     assert result.state.confidence_score == 0.0
@@ -368,9 +410,7 @@ def test_stream_agent_runtime_graph_yields_tokens_and_completed_event(
         if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
     ]
     token_events = [
-        event
-        for event in events
-        if event.event == AgentStreamEventType.ANSWER_TOKEN
+        event for event in events if event.event == AgentStreamEventType.ANSWER_TOKEN
     ]
 
     assert event_types[0] == AgentStreamEventType.AGENT_STARTED
@@ -404,6 +444,101 @@ def test_stream_agent_runtime_graph_yields_tokens_and_completed_event(
     assert captured_llm_requests[0].metadata["context_chunks"] == 1
 
 
+def test_stream_agent_runtime_graph_persists_replay_metadata(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    agent_run_id = uuid4()
+
+    def fake_stream_chat_completion(request):
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.TOKEN,
+            text_delta="The incident response ",
+            model="test-model",
+            provider="test-provider",
+            metadata=request.metadata,
+        )
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.COMPLETED,
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        )
+
+    monkeypatch.setattr(
+        agent_graph,
+        "stream_chat_completion",
+        fake_stream_chat_completion,
+    )
+    db.add(
+        Tenant(
+            tenant_id="tenant-a",
+            name="Tenant A",
+            slug="tenant-a",
+            status="active",
+            metadata_={},
+        )
+    )
+    db.commit()
+
+    events = list(
+        stream_agent_runtime_graph(
+            agent_run_id=agent_run_id,
+            auth=AuthContext(
+                user_id="user-1",
+                tenant_id="tenant-a",
+                workspace_id="workspace-a",
+            ),
+            query="Find the incident response policy",
+            retrieval_filters=RetrievalFilters(workspace_id="workspace-a"),
+            now=now,
+            db=db,
+            search_client=FakeSearchClient(),
+        )
+    )
+    stored = get_agent_run(
+        db=db,
+        agent_run_id=agent_run_id,
+        tenant_id="tenant-a",
+    )
+
+    assert events[-1].event == AgentStreamEventType.AGENT_COMPLETED
+    assert stored is not None
+    assert stored.status == AgentRunStatus.COMPLETED.value
+    assert stored.total_steps == 8
+    assert stored.total_tool_calls == 0
+    stored_steps_by_node = {step.node_name: step for step in stored.steps}
+    assert stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_name == (
+        "llm_gateway"
+    )
+    assert (
+        stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_input[
+            "context_chunk_count"
+        ]
+        == 1
+    )
+    assert "Streamed answer generation produced" in (
+        stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_output_summary
+    )
+    replay_metadata = stored.checkpoints[-1].state["replay_metadata"]
+    assert (
+        replay_metadata[AgentNodeName.GENERATE_ANSWER.value]["output"]["streamed"]
+        is True
+    )
+    assert (
+        replay_metadata[AgentNodeName.GENERATE_ANSWER.value]["output"][
+            "token_event_count"
+        ]
+        == 1
+    )
+
+
 def test_stream_agent_runtime_graph_blocks_generation_without_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -433,9 +568,7 @@ def test_stream_agent_runtime_graph_blocks_generation_without_context(
         if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
     ]
     token_events = [
-        event
-        for event in events
-        if event.event == AgentStreamEventType.ANSWER_TOKEN
+        event for event in events if event.event == AgentStreamEventType.ANSWER_TOKEN
     ]
 
     assert token_events == []
@@ -485,9 +618,7 @@ def test_stream_agent_runtime_graph_emits_failed_event_when_llm_stream_fails(
         if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
     ]
     token_events = [
-        event
-        for event in events
-        if event.event == AgentStreamEventType.ANSWER_TOKEN
+        event for event in events if event.event == AgentStreamEventType.ANSWER_TOKEN
     ]
 
     assert [event.text_delta for event in token_events] == ["Partial answer "]
@@ -628,7 +759,10 @@ def test_run_agent_runtime_graph_persists_steps_and_checkpoints(
     assert stored.total_steps == 8
     assert stored.total_tool_calls == 0
     assert len(result.state.context) == 1
-    assert result.state.final_answer == "The incident response policy content was found [1]."
+    assert (
+        result.state.final_answer
+        == "The incident response policy content was found [1]."
+    )
     assert [step.node_name for step in stored.steps] == result.state.visited_nodes
     assert [step.status for step in stored.steps] == [
         "completed",
@@ -640,6 +774,55 @@ def test_run_agent_runtime_graph_persists_steps_and_checkpoints(
         "completed",
         "completed",
     ]
+    stored_steps_by_node = {step.node_name: step for step in stored.steps}
+    assert stored_steps_by_node[AgentNodeName.BM25_SEARCH.value].tool_name == (
+        "bm25_search"
+    )
+    assert (
+        stored_steps_by_node[AgentNodeName.BM25_SEARCH.value].tool_input[
+            "retrieval_limit"
+        ]
+        == 5
+    )
+    assert "authorized candidate chunks" in (
+        stored_steps_by_node[AgentNodeName.BM25_SEARCH.value].tool_output_summary
+    )
+    assert stored_steps_by_node[AgentNodeName.BUILD_CONTEXT.value].tool_name == (
+        "context_builder"
+    )
+    assert (
+        stored_steps_by_node[AgentNodeName.BUILD_CONTEXT.value].tool_input[
+            "max_context_chunks"
+        ]
+        == 3
+    )
+    assert "Context build selected" in (
+        stored_steps_by_node[AgentNodeName.BUILD_CONTEXT.value].tool_output_summary
+    )
+    assert stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_name == (
+        "llm_gateway"
+    )
+    assert (
+        stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_input[
+            "context_chunk_count"
+        ]
+        == 1
+    )
+    assert "Answer generation produced" in (
+        stored_steps_by_node[AgentNodeName.GENERATE_ANSWER.value].tool_output_summary
+    )
+    assert stored_steps_by_node[AgentNodeName.VERIFY_GROUNDING.value].tool_name == (
+        "answer_verifier"
+    )
+    assert (
+        stored_steps_by_node[AgentNodeName.VERIFY_GROUNDING.value].tool_input[
+            "citation_count"
+        ]
+        == 1
+    )
+    assert "Grounding verification passed" in (
+        stored_steps_by_node[AgentNodeName.VERIFY_GROUNDING.value].tool_output_summary
+    )
     assert [checkpoint.checkpoint_key for checkpoint in stored.checkpoints] == [
         "step-0001-classify_intent",
         "step-0002-rewrite_query",

@@ -1007,6 +1007,13 @@ visited graph node as an agent step, saves each runtime checkpoint, and updates
 the persisted run status when guardrails stop the graph with handoff, timeout,
 failure, or cancellation.
 
+Replayable graph nodes now store summarized replay metadata in checkpoint state
+and persisted step fields. Retrieval and context nodes record limits, counts,
+latency, document IDs, chunk IDs, and replay summaries. Generation records LLM
+provider/model, token, cost, latency, and answer-length metadata. Grounding
+verification records pass/fail status, cited source numbers, confidence, and the
+terminal status. Replay metadata avoids raw prompts and full document content.
+
 The graph also checks the persisted agent run status before each node starts
 when a database session is available. If another flow has cancelled the run, the
 graph records a final cancellation checkpoint for that node, stops with

@@ -430,6 +430,53 @@ def bm25_search_node(graph_state: AgentGraphState) -> dict[str, Any]:
     agent_state.retrieval_strategy = retrieval_response.strategy
     agent_state.retrieved_candidates = retrieval_response.candidates
     agent_state.authorized_chunks = retrieval_response.candidates
+    top_score = None
+    if retrieval_response.candidates:
+        top_score = retrieval_response.candidates[0].score
+    active_filter_fields = []
+    if graph_state.retrieval_filters.workspace_id:
+        active_filter_fields.append("workspace_id")
+    if graph_state.retrieval_filters.document_ids:
+        active_filter_fields.append("document_ids")
+    if graph_state.retrieval_filters.source_types:
+        active_filter_fields.append("source_types")
+    if graph_state.retrieval_filters.tags:
+        active_filter_fields.append("tags")
+    if graph_state.retrieval_filters.metadata:
+        active_filter_fields.append("metadata")
+    if graph_state.retrieval_filters.date_range:
+        active_filter_fields.append("date_range")
+    agent_state.replay_metadata[AgentNodeName.BM25_SEARCH.value] = {
+        "node_name": AgentNodeName.BM25_SEARCH.value,
+        "stage": "retrieval",
+        "tool_name": "bm25_search",
+        "input": {
+            "retrieval_strategy": retrieval_response.strategy.value,
+            "retrieval_limit": graph_state.retrieval_limit,
+            "workspace_id": graph_state.retrieval_filters.workspace_id,
+            "active_filter_fields": active_filter_fields,
+            "metadata_filter_keys": sorted(graph_state.retrieval_filters.metadata),
+            "query_length": len(query_text),
+        },
+        "output": {
+            "candidate_count": len(retrieval_response.candidates),
+            "authorized_chunk_count": len(agent_state.authorized_chunks),
+            "latency_ms": retrieval_response.latency_ms,
+            "top_score": top_score,
+            "document_ids": [
+                str(candidate.document_id)
+                for candidate in retrieval_response.candidates[:10]
+            ],
+            "chunk_ids": [
+                str(candidate.chunk_id)
+                for candidate in retrieval_response.candidates[:10]
+            ],
+        },
+        "summary": (
+            f"BM25 retrieval returned {len(retrieval_response.candidates)} "
+            f"authorized candidate chunks."
+        ),
+    }
 
     # Record the node through the runtime guardrails.
     step_result = record_agent_step(
@@ -515,9 +562,37 @@ def build_context_node(graph_state: AgentGraphState) -> dict[str, Any]:
     )
     agent_state.context = context_response.context
     agent_state.citations = [
-        context_chunk.citation
-        for context_chunk in context_response.context
+        context_chunk.citation for context_chunk in context_response.context
     ]
+    agent_state.replay_metadata[AgentNodeName.BUILD_CONTEXT.value] = {
+        "node_name": AgentNodeName.BUILD_CONTEXT.value,
+        "stage": "retrieval",
+        "tool_name": "context_builder",
+        "input": {
+            "authorized_chunk_count": len(agent_state.authorized_chunks),
+            "max_context_chunks": graph_state.max_context_chunks,
+            "max_context_tokens": graph_state.max_context_tokens,
+            "query_length": len(query_text),
+        },
+        "output": {
+            "context_chunk_count": len(context_response.context),
+            "citation_count": len(agent_state.citations),
+            "context_token_count": context_response.token_count,
+            "document_ids": [
+                str(context_chunk.document_id)
+                for context_chunk in context_response.context[:10]
+            ],
+            "chunk_ids": [
+                str(context_chunk.chunk_id)
+                for context_chunk in context_response.context[:10]
+            ],
+        },
+        "summary": (
+            f"Context build selected {len(context_response.context)} chunks, "
+            f"{len(agent_state.citations)} citations, "
+            f"and {context_response.token_count} tokens."
+        ),
+    }
 
     # Record the node through the runtime guardrails.
     step_result = record_agent_step(
@@ -602,6 +677,29 @@ def generate_answer_node(graph_state: AgentGraphState) -> dict[str, Any]:
         if guardrail_decision.fallback_answer is not None:
             agent_state.final_answer = SAFE_FALLBACK_ANSWER
             agent_state.handoff_required = True
+        agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+            "node_name": AgentNodeName.GENERATE_ANSWER.value,
+            "stage": "generation",
+            "tool_name": "llm_gateway",
+            "input": {
+                "context_chunk_count": len(agent_state.context),
+                "citation_count": len(agent_state.citations),
+                "context_token_count": sum(
+                    context_chunk.token_count for context_chunk in agent_state.context
+                ),
+                "has_authorized_context": bool(agent_state.context),
+            },
+            "output": {
+                "generated": False,
+                "handoff_required": agent_state.handoff_required,
+                "stop_reason": guardrail_decision.reason,
+                "answer_character_count": len(agent_state.final_answer or ""),
+            },
+            "summary": (
+                f"Answer generation stopped before LLM call: "
+                f"{guardrail_decision.reason}"
+            ),
+        }
 
         step_result = record_agent_step(
             state=agent_state,
@@ -671,6 +769,34 @@ def generate_answer_node(graph_state: AgentGraphState) -> dict[str, Any]:
             )
         )
         agent_state.draft_answer = llm_response.text
+        agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+            "node_name": AgentNodeName.GENERATE_ANSWER.value,
+            "stage": "generation",
+            "tool_name": "llm_gateway",
+            "input": {
+                "context_chunk_count": len(agent_state.context),
+                "citation_count": len(agent_state.citations),
+                "context_token_count": sum(
+                    context_chunk.token_count for context_chunk in agent_state.context
+                ),
+                "has_authorized_context": bool(agent_state.context),
+            },
+            "output": {
+                "generated": True,
+                "llm_provider": llm_response.provider,
+                "llm_model": llm_response.model,
+                "llm_input_tokens": llm_response.input_tokens,
+                "llm_output_tokens": llm_response.output_tokens,
+                "llm_cost_estimate": llm_response.cost_estimate,
+                "latency_ms": llm_response.latency_ms,
+                "answer_character_count": len(agent_state.draft_answer or ""),
+            },
+            "summary": (
+                f"Answer generation produced "
+                f"{len(agent_state.draft_answer or '')} characters from "
+                f"{len(agent_state.context)} context chunks."
+            ),
+        }
 
     except Exception as e:
         logger.exception(
@@ -680,6 +806,26 @@ def generate_answer_node(graph_state: AgentGraphState) -> dict[str, Any]:
         )
         agent_state.final_answer = SAFE_FALLBACK_ANSWER
         agent_state.handoff_required = True
+        agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+            "node_name": AgentNodeName.GENERATE_ANSWER.value,
+            "stage": "generation",
+            "tool_name": "llm_gateway",
+            "input": {
+                "context_chunk_count": len(agent_state.context),
+                "citation_count": len(agent_state.citations),
+                "context_token_count": sum(
+                    context_chunk.token_count for context_chunk in agent_state.context
+                ),
+                "has_authorized_context": bool(agent_state.context),
+            },
+            "output": {
+                "generated": False,
+                "handoff_required": True,
+                "error_type": type(e).__name__,
+                "answer_character_count": len(agent_state.final_answer or ""),
+            },
+            "summary": "Answer generation failed through the LLM gateway.",
+        }
         step_result = record_agent_step(
             state=agent_state,
             node_name=AgentNodeName.GENERATE_ANSWER,
@@ -790,6 +936,29 @@ def verify_grounding_node(graph_state: AgentGraphState) -> dict[str, Any]:
         agent_state.confidence_score = 0.0
         status = AgentRunStatus.HANDOFF_REQUIRED
         stop_reason = verification_result.reason
+    agent_state.replay_metadata[AgentNodeName.VERIFY_GROUNDING.value] = {
+        "node_name": AgentNodeName.VERIFY_GROUNDING.value,
+        "stage": "verification",
+        "tool_name": "answer_verifier",
+        "input": {
+            "answer_character_count": len(agent_state.draft_answer or ""),
+            "context_chunk_count": len(agent_state.context),
+            "citation_count": len(agent_state.citations),
+        },
+        "output": {
+            "passed": verification_result.passed,
+            "reason": verification_result.reason,
+            "cited_source_numbers": verification_result.cited_source_numbers,
+            "final_status": status.value,
+            "confidence_score": agent_state.confidence_score,
+            "handoff_required": agent_state.handoff_required,
+        },
+        "summary": (
+            f"Grounding verification "
+            f"{'passed' if verification_result.passed else 'failed'}: "
+            f"{verification_result.reason}"
+        ),
+    }
 
     # Record the node through the runtime guardrails.
     step_result = record_agent_step(
@@ -910,6 +1079,25 @@ def run_agent_runtime_graph(
             if not isinstance(step_number, int):
                 step_number = len(visited_nodes) if visited_nodes else 0
 
+            replay_tool_name = None
+            replay_tool_input = None
+            replay_tool_output_summary = None
+            replay_metadata = checkpoint.state.get("replay_metadata", {})
+            if isinstance(replay_metadata, dict):
+                node_replay_metadata = replay_metadata.get(str(node_name), {})
+                if isinstance(node_replay_metadata, dict):
+                    candidate_tool_name = node_replay_metadata.get("tool_name")
+                    if isinstance(candidate_tool_name, str):
+                        replay_tool_name = candidate_tool_name
+
+                    candidate_tool_input = node_replay_metadata.get("input")
+                    if isinstance(candidate_tool_input, dict):
+                        replay_tool_input = candidate_tool_input
+
+                    candidate_summary = node_replay_metadata.get("summary")
+                    if isinstance(candidate_summary, str):
+                        replay_tool_output_summary = candidate_summary
+
             step_status = "completed"
             finish_run = False
             if checkpoint == completed_graph_state.checkpoints[-1]:
@@ -925,6 +1113,9 @@ def run_agent_runtime_graph(
                 step_number=step_number,
                 status=step_status,
                 finish_run=finish_run,
+                tool_name=replay_tool_name,
+                tool_input=replay_tool_input,
+                tool_output_summary=replay_tool_output_summary,
             )
             save_agent_checkpoint(
                 db=db,
@@ -1125,6 +1316,30 @@ def stream_agent_runtime_graph(
                 if guardrail_decision.fallback_answer is not None:
                     agent_state.final_answer = SAFE_FALLBACK_ANSWER
                     agent_state.handoff_required = True
+                agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+                    "node_name": AgentNodeName.GENERATE_ANSWER.value,
+                    "stage": "generation",
+                    "tool_name": "llm_gateway",
+                    "input": {
+                        "context_chunk_count": len(agent_state.context),
+                        "citation_count": len(agent_state.citations),
+                        "context_token_count": sum(
+                            context_chunk.token_count
+                            for context_chunk in agent_state.context
+                        ),
+                        "has_authorized_context": bool(agent_state.context),
+                    },
+                    "output": {
+                        "generated": False,
+                        "handoff_required": agent_state.handoff_required,
+                        "stop_reason": guardrail_decision.reason,
+                        "answer_character_count": len(agent_state.final_answer or ""),
+                    },
+                    "summary": (
+                        f"Answer generation stopped before LLM stream: "
+                        f"{guardrail_decision.reason}"
+                    ),
+                }
 
                 step_result = record_agent_step(
                     state=agent_state,
@@ -1179,6 +1394,12 @@ def stream_agent_runtime_graph(
                 try:
                     answer_text = ""
                     token_index = 0
+                    answer_model = None
+                    answer_provider = None
+                    answer_input_tokens = None
+                    answer_output_tokens = None
+                    answer_cost_estimate = None
+                    answer_latency_ms = None
                     for llm_stream_event in stream_chat_completion(
                         ChatCompletionRequest(
                             messages=[
@@ -1232,8 +1453,47 @@ def stream_agent_runtime_graph(
 
                         if llm_stream_event.event == LLMStreamEventType.COMPLETED:
                             answer_text = llm_stream_event.text or ""
+                            answer_model = llm_stream_event.model
+                            answer_provider = llm_stream_event.provider
+                            answer_input_tokens = llm_stream_event.input_tokens
+                            answer_output_tokens = llm_stream_event.output_tokens
+                            answer_cost_estimate = llm_stream_event.cost_estimate
+                            answer_latency_ms = llm_stream_event.latency_ms
 
                     agent_state.draft_answer = answer_text
+                    agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+                        "node_name": AgentNodeName.GENERATE_ANSWER.value,
+                        "stage": "generation",
+                        "tool_name": "llm_gateway",
+                        "input": {
+                            "context_chunk_count": len(agent_state.context),
+                            "citation_count": len(agent_state.citations),
+                            "context_token_count": sum(
+                                context_chunk.token_count
+                                for context_chunk in agent_state.context
+                            ),
+                            "has_authorized_context": bool(agent_state.context),
+                        },
+                        "output": {
+                            "generated": True,
+                            "streamed": True,
+                            "token_event_count": token_index,
+                            "llm_provider": answer_provider,
+                            "llm_model": answer_model,
+                            "llm_input_tokens": answer_input_tokens,
+                            "llm_output_tokens": answer_output_tokens,
+                            "llm_cost_estimate": answer_cost_estimate,
+                            "latency_ms": answer_latency_ms,
+                            "answer_character_count": len(
+                                agent_state.draft_answer or ""
+                            ),
+                        },
+                        "summary": (
+                            f"Streamed answer generation produced "
+                            f"{len(agent_state.draft_answer or '')} characters "
+                            f"from {len(agent_state.context)} context chunks."
+                        ),
+                    }
 
                 except Exception as e:
                     logger.exception(
@@ -1243,6 +1503,30 @@ def stream_agent_runtime_graph(
                     )
                     agent_state.final_answer = SAFE_FALLBACK_ANSWER
                     agent_state.handoff_required = True
+                    agent_state.replay_metadata[AgentNodeName.GENERATE_ANSWER.value] = {
+                        "node_name": AgentNodeName.GENERATE_ANSWER.value,
+                        "stage": "generation",
+                        "tool_name": "llm_gateway",
+                        "input": {
+                            "context_chunk_count": len(agent_state.context),
+                            "citation_count": len(agent_state.citations),
+                            "context_token_count": sum(
+                                context_chunk.token_count
+                                for context_chunk in agent_state.context
+                            ),
+                            "has_authorized_context": bool(agent_state.context),
+                        },
+                        "output": {
+                            "generated": False,
+                            "streamed": True,
+                            "handoff_required": True,
+                            "error_type": type(e).__name__,
+                            "answer_character_count": len(
+                                agent_state.final_answer or ""
+                            ),
+                        },
+                        "summary": "Streaming answer generation failed through the LLM gateway.",
+                    }
                     step_result = record_agent_step(
                         state=agent_state,
                         node_name=AgentNodeName.GENERATE_ANSWER,
@@ -1353,6 +1637,28 @@ def stream_agent_runtime_graph(
             if not isinstance(step_number, int):
                 step_number = len(visited_nodes) if visited_nodes else 0
 
+            replay_tool_name = None
+            replay_tool_input = None
+            replay_tool_output_summary = None
+            replay_metadata = checkpoint.state.get("replay_metadata", {})
+            if isinstance(replay_metadata, dict):
+                node_replay_metadata = replay_metadata.get(
+                    str(persistence_node_name),
+                    {},
+                )
+                if isinstance(node_replay_metadata, dict):
+                    candidate_tool_name = node_replay_metadata.get("tool_name")
+                    if isinstance(candidate_tool_name, str):
+                        replay_tool_name = candidate_tool_name
+
+                    candidate_tool_input = node_replay_metadata.get("input")
+                    if isinstance(candidate_tool_input, dict):
+                        replay_tool_input = candidate_tool_input
+
+                    candidate_summary = node_replay_metadata.get("summary")
+                    if isinstance(candidate_summary, str):
+                        replay_tool_output_summary = candidate_summary
+
             step_status = "completed"
             finish_run = False
             if checkpoint == graph_state.checkpoints[-1]:
@@ -1368,6 +1674,9 @@ def stream_agent_runtime_graph(
                 step_number=step_number,
                 status=step_status,
                 finish_run=finish_run,
+                tool_name=replay_tool_name,
+                tool_input=replay_tool_input,
+                tool_output_summary=replay_tool_output_summary,
             )
             save_agent_checkpoint(
                 db=db,
