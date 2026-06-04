@@ -59,7 +59,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/kafka/producer.py` | Fakeable Kafka event publisher adapter that serializes `EventEnvelope`, applies an idempotency message key, and can create a concrete `kafka-python` producer for runtime publishing against the local Kafka stack. | Add delivery callbacks, retry policy, producer metrics, and broader local Kafka integration tests. | High |
 | `src/agentic_rag/shared/kafka/consumer.py` | Fakeable Kafka event consumer adapter that validates `EventEnvelope` messages, commits valid messages after handler success, and skips invalid poison messages after logging validation failures. | Add delivery metrics, retry policy hooks, and broader local Kafka integration coverage. | High |
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
-| `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
+| `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat, token streaming, and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, stream completion events, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, stream cancellation/backpressure handling, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add streaming events when that slice is selected. | High |
 | `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, and optionally persists graph steps/checkpoints through agent-run CRUD. | Add token-level streaming and richer replay metadata once the API contract is selected. | High |
@@ -98,7 +98,7 @@ retrieval quality, and production operations.
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
 | `tests/unit/search/test_opensearch.py` | OpenSearch client tests. | Add partial bulk failure handling, search error handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
-| `tests/unit/llm/test_gateway.py` | LLM gateway unit tests, including LiteLLM call mapping, request budget rejection, retry behavior, and circuit breaker behavior. | Add provider-specific mocked cases, timeout tests, Redis-backed circuit tests, and no-secret logging tests. | High |
+| `tests/unit/llm/test_gateway.py` | LLM gateway unit tests, including LiteLLM call mapping, token streaming events, request budget rejection, retry behavior, and circuit breaker behavior. | Add provider-specific mocked cases, timeout tests, Redis-backed circuit tests, stream failure edge cases, and no-secret logging tests. | High |
 | `tests/unit/agent/test_runtime.py` | Agent runtime guardrail tests for state initialization, step and tool limits, timeout behavior, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add persistence-backed checkpoint and cancellation tests when those runtime layers are implemented. | High |
 | `tests/unit/agent/test_graph.py` | Agent graph tests for LangGraph node progression, guardrail stop behavior, checkpoint output, persistence-backed graph execution, persisted cancellation stops, authorized BM25/context building, LLM generation, and grounding verification. | Add token streaming tests when that slice lands. | High |
 | `tests/unit/query/test_answer_verifier.py` | Deterministic answer verifier tests for valid citations, missing citations, unknown citations, and no-context behavior. | Add quote-level grounding and confidence scoring tests when verifier logic becomes richer. | High |
@@ -116,6 +116,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added LLM gateway token streaming contract through LiteLLM. |
 | 2026-06-04 | Wired LLM answer generation and grounding verification into the agent graph. |
 | 2026-06-04 | Wired authorized BM25 retrieval and context building into the agent graph. |
 | 2026-06-04 | Added persisted agent graph cancellation checks before graph node execution. |
@@ -139,7 +140,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 1 | Wire LLM token streaming into the agent runtime and query streaming API contract. |
 | 2 | Add LLM provider health dashboard panels and alert rules from the circuit-breaker metrics. |
 | 3 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
 | 4 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |

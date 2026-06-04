@@ -61,6 +61,24 @@ class LLMResponse(APIModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class LLMStreamEventType(StrEnum):
+    TOKEN = "token"
+    COMPLETED = "completed"
+
+
+class LLMStreamEvent(APIModel):
+    event: LLMStreamEventType
+    text_delta: str | None = None
+    text: str | None = None
+    model: str
+    provider: str
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cost_estimate: float = Field(default=0.0, ge=0.0)
+    latency_ms: int = Field(default=0, ge=0)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
 class LLMMessage(APIModel):
     role: str = Field(..., min_length=1)
     content: str = Field(..., min_length=1)

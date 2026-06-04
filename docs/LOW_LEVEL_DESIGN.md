@@ -1028,12 +1028,15 @@ src/agentic_rag/llm/gateway.py
 src/agentic_rag/llm/circuit_breaker.py
 ```
 
-The local gateway supports chat completion and embedding generation through
-LiteLLM. Embedding calls enforce input budget, retry transient provider
-failures, reuse circuit-breaker protection, and validate the returned vector
-dimension against the configured pgvector dimension before workers persist
-vectors. Current local testing uses the Gemini API model
-`gemini-embedding-001`, addressed through LiteLLM as
+The local gateway supports chat completion, token streaming, and embedding
+generation through LiteLLM. Streaming emits token delta events and a final
+completed event with model, provider, usage, latency, cost, and metadata. The
+streaming contract is kept inside the LLM gateway for now and is not wired into
+the query API or agent graph streaming path yet. Embedding calls enforce input
+budget, retry transient provider failures, reuse circuit-breaker protection,
+and validate the returned vector dimension against the configured pgvector
+dimension before workers persist vectors. Current local testing uses the Gemini
+API model `gemini-embedding-001`, addressed through LiteLLM as
 `gemini/gemini-embedding-001`, with 768 output dimensions to keep the existing
 pgvector schema. The circuit breaker stores provider/model health in memory by
 default for simple local runs. Production and multi-replica deployments can set

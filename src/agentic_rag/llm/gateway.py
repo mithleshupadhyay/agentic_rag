@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from litellm import (
@@ -21,6 +22,8 @@ from agentic_rag.shared.schemas.llm import (
     EmbeddingRequest,
     EmbeddingResponse,
     LLMResponse,
+    LLMStreamEvent,
+    LLMStreamEventType,
 )
 
 
@@ -198,6 +201,279 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
     )
 
     return LLMResponse(
+        text=text,
+        model=model,
+        provider=provider,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_estimate=cost_estimate,
+        latency_ms=latency_ms,
+        metadata=request.metadata,
+    )
+
+
+def stream_chat_completion(request: ChatCompletionRequest) -> Iterator[LLMStreamEvent]:
+    model = request.model or settings.default_llm_model
+    provider = request.provider or settings.llm_provider
+    temperature = (
+        request.temperature
+        if request.temperature is not None
+        else settings.llm_temperature
+    )
+    max_tokens = request.max_tokens or settings.llm_max_tokens
+    timeout_seconds = request.timeout_seconds or settings.llm_timeout_seconds
+    input_chars = 0
+    for request_message in request.messages:
+        input_chars += len(request_message.content)
+
+    if input_chars > settings.llm_max_input_chars:
+        logger.warning(
+            f"[LLMGateway] Stream request rejected by input budget provider={provider} "
+            f"model={model} input_chars={input_chars} "
+            f"max_input_chars={settings.llm_max_input_chars}"
+        )
+        raise ValueError(
+            "LLM request exceeds input character budget "
+            f"({input_chars}>{settings.llm_max_input_chars})."
+        )
+
+    if max_tokens > settings.llm_max_output_tokens:
+        logger.warning(
+            f"[LLMGateway] Stream request rejected by output budget provider={provider} "
+            f"model={model} max_tokens={max_tokens} "
+            f"max_output_tokens={settings.llm_max_output_tokens}"
+        )
+        raise ValueError(
+            "LLM request exceeds output token budget "
+            f"({max_tokens}>{settings.llm_max_output_tokens})."
+        )
+
+    if settings.llm_circuit_breaker_enabled:
+        llm_circuit_breaker.check(provider, model)
+
+    logger.info(
+        f"[LLMGateway] Chat completion stream started provider={provider} "
+        f"model={model} input_chars={input_chars} max_tokens={max_tokens} "
+        f"timeout_seconds={timeout_seconds}"
+    )
+    started_at = time.perf_counter()
+
+    completion_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            request_message.model_dump()
+            for request_message in request.messages
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "timeout": timeout_seconds,
+        "stream": True,
+    }
+
+    api_key = settings.llm_api_key or settings.litellm_api_key
+    if api_key:
+        completion_kwargs["api_key"] = api_key
+
+    if settings.litellm_base_url:
+        completion_kwargs["base_url"] = settings.litellm_base_url
+    elif model.startswith("ollama/") and settings.ollama_base_url:
+        completion_kwargs["base_url"] = settings.ollama_base_url
+
+    response_stream: Any | None = None
+    max_attempts = settings.llm_max_retries + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response_stream = litellm_completion(**completion_kwargs)
+            break
+        except (
+            APIConnectionError,
+            APIError,
+            BadGatewayError,
+            InternalServerError,
+            RateLimitError,
+            ServiceUnavailableError,
+            Timeout,
+        ) as e:
+            if attempt >= max_attempts:
+                if settings.llm_circuit_breaker_enabled:
+                    llm_circuit_breaker.record_failure(
+                        provider=provider,
+                        model=model,
+                        error=e,
+                        failure_threshold=(
+                            settings.llm_circuit_breaker_failure_threshold
+                        ),
+                        cooldown_seconds=(
+                            settings.llm_circuit_breaker_cooldown_seconds
+                        ),
+                    )
+
+                logger.exception(
+                    f"[LLMGateway] Chat completion stream failed after retries "
+                    f"provider={provider} model={model} attempts={attempt} "
+                    f"error_type={type(e).__name__}"
+                )
+                raise
+
+            retry_after_seconds = settings.llm_retry_backoff_seconds * (
+                2 ** (attempt - 1)
+            )
+            logger.warning(
+                f"[LLMGateway] Chat completion stream retry scheduled "
+                f"provider={provider} model={model} attempt={attempt} "
+                f"max_attempts={max_attempts} "
+                f"retry_after_seconds={retry_after_seconds:.2f} "
+                f"error_type={type(e).__name__}"
+            )
+            if retry_after_seconds > 0:
+                time.sleep(retry_after_seconds)
+
+    if response_stream is None:
+        raise RuntimeError("LLM stream was not returned.")
+
+    text_parts: list[str] = []
+    input_tokens = 0
+    output_tokens = 0
+    cost_estimate = 0.0
+
+    try:
+        for response_chunk in response_stream:
+            usage = (
+                response_chunk.get("usage")
+                if isinstance(response_chunk, dict)
+                else getattr(response_chunk, "usage", None)
+            )
+            if isinstance(usage, dict):
+                input_tokens = int(
+                    usage.get("prompt_tokens")
+                    or usage.get("input_tokens")
+                    or input_tokens
+                )
+                output_tokens = int(
+                    usage.get("completion_tokens")
+                    or usage.get("output_tokens")
+                    or output_tokens
+                )
+            elif usage is not None:
+                input_tokens = int(
+                    getattr(usage, "prompt_tokens", 0)
+                    or getattr(usage, "input_tokens", 0)
+                    or input_tokens
+                )
+                output_tokens = int(
+                    getattr(usage, "completion_tokens", 0)
+                    or getattr(usage, "output_tokens", 0)
+                    or output_tokens
+                )
+
+            hidden_params = (
+                response_chunk.get("_hidden_params", {})
+                if isinstance(response_chunk, dict)
+                else getattr(response_chunk, "_hidden_params", {})
+            ) or {}
+            if isinstance(hidden_params, dict):
+                cost_value = (
+                    hidden_params.get("response_cost")
+                    or hidden_params.get("cost")
+                )
+                if isinstance(cost_value, (int, float)):
+                    cost_estimate = float(cost_value)
+
+            choices = (
+                response_chunk.get("choices")
+                if isinstance(response_chunk, dict)
+                else getattr(response_chunk, "choices", None)
+            ) or []
+            if not choices:
+                continue
+
+            first_choice = choices[0]
+            text_delta = ""
+            if isinstance(first_choice, dict):
+                delta = first_choice.get("delta") or {}
+                if isinstance(delta, dict):
+                    text_delta = delta.get("content") or ""
+                else:
+                    text_delta = getattr(delta, "content", "") or ""
+                if not text_delta:
+                    message = first_choice.get("message") or {}
+                    if isinstance(message, dict):
+                        text_delta = message.get("content") or ""
+                    else:
+                        text_delta = getattr(message, "content", "") or ""
+            else:
+                delta = getattr(first_choice, "delta", None)
+                if isinstance(delta, dict):
+                    text_delta = delta.get("content") or ""
+                else:
+                    text_delta = (
+                        getattr(delta, "content", "")
+                        if delta is not None
+                        else ""
+                    )
+                if not text_delta:
+                    message = getattr(first_choice, "message", None)
+                    if isinstance(message, dict):
+                        text_delta = message.get("content") or ""
+                    else:
+                        text_delta = (
+                            getattr(message, "content", "")
+                            if message is not None
+                            else ""
+                        )
+
+            if not text_delta:
+                continue
+
+            text_parts.append(text_delta)
+            yield LLMStreamEvent(
+                event=LLMStreamEventType.TOKEN,
+                text_delta=text_delta,
+                model=model,
+                provider=provider,
+                metadata=request.metadata,
+            )
+
+    except (
+        APIConnectionError,
+        APIError,
+        BadGatewayError,
+        InternalServerError,
+        RateLimitError,
+        ServiceUnavailableError,
+        Timeout,
+    ) as e:
+        if settings.llm_circuit_breaker_enabled:
+            llm_circuit_breaker.record_failure(
+                provider=provider,
+                model=model,
+                error=e,
+                failure_threshold=settings.llm_circuit_breaker_failure_threshold,
+                cooldown_seconds=settings.llm_circuit_breaker_cooldown_seconds,
+            )
+
+        logger.exception(
+            f"[LLMGateway] Chat completion stream failed "
+            f"provider={provider} model={model} error_type={type(e).__name__}"
+        )
+        raise
+
+    if settings.llm_circuit_breaker_enabled:
+        llm_circuit_breaker.reset(provider, model)
+
+    text = "".join(text_parts).strip()
+    if not text:
+        raise RuntimeError("LLM stream did not include answer text.")
+
+    latency_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        f"[LLMGateway] Chat completion stream completed provider={provider} "
+        f"model={model} input_tokens={input_tokens} output_tokens={output_tokens} "
+        f"latency_ms={latency_ms}"
+    )
+
+    yield LLMStreamEvent(
+        event=LLMStreamEventType.COMPLETED,
         text=text,
         model=model,
         provider=provider,

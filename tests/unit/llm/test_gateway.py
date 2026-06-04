@@ -2,7 +2,11 @@ import pytest
 from litellm import RateLimitError, ServiceUnavailableError
 
 from agentic_rag.llm.circuit_breaker import llm_circuit_breaker
-from agentic_rag.llm.gateway import generate_chat_completion, generate_embeddings
+from agentic_rag.llm.gateway import (
+    generate_chat_completion,
+    generate_embeddings,
+    stream_chat_completion,
+)
 from agentic_rag.monitoring.metrics import (
     LLM_PROVIDER_CIRCUIT_STATE,
     LLM_PROVIDER_FAILURE_COUNT,
@@ -13,6 +17,7 @@ from agentic_rag.shared.schemas.llm import (
     ChatCompletionRequest,
     EmbeddingRequest,
     LLMMessage,
+    LLMStreamEventType,
 )
 
 
@@ -43,6 +48,30 @@ class FakeEmbeddingItem:
 class FakeEmbeddingResponse:
     def __init__(self, count: int = 2):
         self.data = [FakeEmbeddingItem(0.1 + index) for index in range(count)]
+
+
+class FakeStreamDelta:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class FakeStreamChoice:
+    def __init__(self, content: str):
+        self.delta = FakeStreamDelta(content)
+
+
+class FakeStreamUsage:
+    prompt_tokens = 12
+    completion_tokens = 5
+
+
+class FakeStreamChunk:
+    def __init__(self, content: str, usage=None, cost: float | None = None):
+        self.choices = [FakeStreamChoice(content)]
+        self.usage = usage
+        self._hidden_params = {}
+        if cost is not None:
+            self._hidden_params = {"response_cost": cost}
 
 
 @pytest.fixture(autouse=True)
@@ -129,7 +158,7 @@ def test_generate_chat_completion_uses_ollama_base_url(monkeypatch) -> None:
 
 def test_generate_chat_completion_rejects_empty_response(monkeypatch) -> None:
     class EmptyResponse:
-        choices = []
+        choices: list[object] = []
 
     def fake_completion(**kwargs):
         return EmptyResponse()
@@ -195,7 +224,7 @@ def test_generate_chat_completion_rejects_output_over_budget(monkeypatch) -> Non
 
 def test_generate_chat_completion_retries_transient_failure(monkeypatch) -> None:
     calls = []
-    sleep_seconds = []
+    sleep_seconds: list[float] = []
 
     def fake_completion(**kwargs):
         calls.append(kwargs)
@@ -235,7 +264,7 @@ def test_generate_chat_completion_retries_transient_failure(monkeypatch) -> None
 
 def test_generate_chat_completion_fails_after_retry_limit(monkeypatch) -> None:
     calls = []
-    sleep_seconds = []
+    sleep_seconds: list[float] = []
 
     def fake_completion(**kwargs):
         calls.append(kwargs)
@@ -488,6 +517,185 @@ def test_generate_chat_completion_bypasses_circuit_when_disabled(monkeypatch) ->
 
     assert len(calls) == 1
     assert response.text == "Grounded answer [1]."
+
+
+def test_stream_chat_completion_yields_tokens_and_completed_event(monkeypatch) -> None:
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return [
+            {"choices": [{"delta": {"content": "Grounded "}}]},
+            {"choices": [{"delta": {"content": "answer [1]."}}]},
+            FakeStreamChunk("", usage=FakeStreamUsage(), cost=0.004),
+        ]
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "secret-key")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_temperature", 0.2)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_tokens", 500)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 600)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_timeout_seconds", 15)
+
+    events = list(
+        stream_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="system", content="Use context only."),
+                    LLMMessage(role="user", content="Question and context."),
+                ],
+                metadata={"task": "query_synthesis"},
+            )
+        )
+    )
+
+    assert captured["model"] == "test-model"
+    assert captured["temperature"] == 0.2
+    assert captured["max_tokens"] == 500
+    assert captured["timeout"] == 15
+    assert captured["stream"] is True
+    assert captured["api_key"] == "secret-key"
+    assert events[0].event == LLMStreamEventType.TOKEN
+    assert events[0].text_delta == "Grounded "
+    assert events[1].event == LLMStreamEventType.TOKEN
+    assert events[1].text_delta == "answer [1]."
+    assert events[2].event == LLMStreamEventType.COMPLETED
+    assert events[2].text == "Grounded answer [1]."
+    assert events[2].model == "test-model"
+    assert events[2].provider == "litellm"
+    assert events[2].input_tokens == 12
+    assert events[2].output_tokens == 5
+    assert events[2].cost_estimate == 0.004
+    assert events[2].metadata == {"task": "query_synthesis"}
+
+
+def test_stream_chat_completion_retries_startup_failure(monkeypatch) -> None:
+    calls = []
+    sleep_seconds: list[float] = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ServiceUnavailableError(
+                message="temporary provider failure",
+                llm_provider="litellm",
+                model="test-model",
+            )
+        return [
+            {"choices": [{"delta": {"content": "Grounded answer [1]."}}]},
+        ]
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.time.sleep", sleep_seconds.append)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_retry_backoff_seconds", 0.1)
+
+    events = list(
+        stream_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(role="user", content="Question and context."),
+                ],
+            )
+        )
+    )
+
+    assert len(calls) == 2
+    assert sleep_seconds == [0.1]
+    assert events[-1].event == LLMStreamEventType.COMPLETED
+    assert events[-1].text == "Grounded answer [1]."
+
+
+def test_stream_chat_completion_records_stream_failure(monkeypatch) -> None:
+    class FailingStream:
+        def __iter__(self):
+            yield {"choices": [{"delta": {"content": "Partial answer "}}]}
+            raise RateLimitError(
+                message="temporary rate limit",
+                llm_provider="litellm",
+                model="test-model",
+            )
+
+    def fake_completion(**kwargs):
+        return FailingStream()
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.circuit_breaker.time.time", lambda: 1000.0)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.default_llm_model", "test-model")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 0)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_circuit_breaker_enabled", True)
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.llm_circuit_breaker_failure_threshold",
+        1,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.llm_circuit_breaker_cooldown_seconds",
+        60,
+    )
+
+    stream = stream_chat_completion(
+        ChatCompletionRequest(
+            messages=[
+                LLMMessage(role="user", content="Question and context."),
+            ],
+        )
+    )
+
+    first_event = next(stream)
+    assert first_event.event == LLMStreamEventType.TOKEN
+    assert first_event.text_delta == "Partial answer "
+
+    with pytest.raises(RateLimitError):
+        next(stream)
+
+    circuit_state = llm_circuit_breaker.get_state("litellm", "test-model")
+    assert circuit_state
+    assert circuit_state.failure_count == 1
+    assert circuit_state.opened_until == 1060.0
+
+
+def test_stream_chat_completion_rejects_input_over_budget(monkeypatch) -> None:
+    def fake_completion(**kwargs):
+        raise AssertionError("Provider should not be called for over-budget input.")
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_retries", 2)
+
+    with pytest.raises(ValueError) as exc_info:
+        list(
+            stream_chat_completion(
+                ChatCompletionRequest(
+                    messages=[
+                        LLMMessage(role="user", content="x" * 1001),
+                    ],
+                )
+            )
+        )
+
+    assert "input character budget" in str(exc_info.value)
 
 
 def test_generate_embeddings_calls_litellm(monkeypatch) -> None:
