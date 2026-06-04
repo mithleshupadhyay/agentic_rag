@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -615,6 +616,80 @@ def test_list_query_runs_filters_by_verification_status(db: Session) -> None:
     assert [query_run.id for query_run in skipped_runs] == [skipped_run_id]
     assert not_required_total == 1
     assert [query_run.id for query_run in not_required_runs] == [not_required_run_id]
+
+
+def test_list_query_runs_filters_by_created_at(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    add_tenant(db, "tenant-b")
+    tenant_a_context = UserContext(
+        id="user-a",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    tenant_b_context = UserContext(
+        id="user-b",
+        customer_id="tenant-b",
+        tenant_id="tenant-b",
+    )
+    old_run_id = uuid4()
+    middle_run_id = uuid4()
+    new_run_id = uuid4()
+    tenant_b_run_id = uuid4()
+
+    old_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old query"),
+        agent_run_id=old_run_id,
+    )
+    middle_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="middle query"),
+        agent_run_id=middle_run_id,
+    )
+    new_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="new query"),
+        agent_run_id=new_run_id,
+    )
+    tenant_b_run = create_query_run(
+        user_context=tenant_b_context,
+        db=db,
+        request=QueryRequest(query="tenant b middle query"),
+        agent_run_id=tenant_b_run_id,
+    )
+
+    old_run.created_at = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+    middle_run.created_at = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)
+    new_run.created_at = datetime(2026, 1, 20, 9, 0, tzinfo=timezone.utc)
+    tenant_b_run.created_at = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)
+    db.commit()
+
+    range_runs, range_total = list_query_runs(
+        db,
+        "tenant-a",
+        created_from=datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc),
+        created_to=datetime(2026, 1, 15, 23, 59, tzinfo=timezone.utc),
+    )
+    from_runs, from_total = list_query_runs(
+        db,
+        "tenant-a",
+        created_from=datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc),
+    )
+    to_runs, to_total = list_query_runs(
+        db,
+        "tenant-a",
+        created_to=datetime(2026, 1, 15, 23, 59, tzinfo=timezone.utc),
+    )
+
+    assert range_total == 1
+    assert [query_run.id for query_run in range_runs] == [middle_run_id]
+    assert from_total == 2
+    assert [query_run.id for query_run in from_runs] == [new_run_id, middle_run_id]
+    assert to_total == 2
+    assert [query_run.id for query_run in to_runs] == [middle_run_id, old_run_id]
 
 
 def test_create_query_run_rolls_back_on_integrity_error(db: Session) -> None:

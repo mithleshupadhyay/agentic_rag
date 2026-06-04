@@ -1094,6 +1094,82 @@ def test_list_query_run_endpoint_filters_by_verification_status() -> None:
         db.close()
 
 
+def test_list_query_run_endpoint_filters_by_created_at() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        old_run_id = uuid4()
+        middle_run_id = uuid4()
+        new_run_id = uuid4()
+        old_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="old query", workspace_id="workspace-a"),
+            agent_run_id=old_run_id,
+            request_id="request-id-old",
+        )
+        middle_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="middle query", workspace_id="workspace-a"),
+            agent_run_id=middle_run_id,
+            request_id="request-id-middle",
+        )
+        new_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="new query", workspace_id="workspace-a"),
+            agent_run_id=new_run_id,
+            request_id="request-id-new",
+        )
+
+        old_run.created_at = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+        middle_run.created_at = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)
+        new_run.created_at = datetime(2026, 1, 20, 9, 0, tzinfo=timezone.utc)
+        db.commit()
+
+        for client in client_with_user(user_context, db):
+            range_response = client.get(
+                "/query?page=1&size=20"
+                "&created_from=2026-01-05T00:00:00Z"
+                "&created_to=2026-01-15T23:59:00Z"
+            )
+            from_response = client.get(
+                "/query?page=1&size=20&created_from=2026-01-05T00:00:00Z"
+            )
+            to_response = client.get(
+                "/query?page=1&size=20&created_to=2026-01-15T23:59:00Z"
+            )
+
+        range_body = range_response.json()
+        from_body = from_response.json()
+        to_body = to_response.json()
+
+        assert range_response.status_code == 200
+        assert range_body["page"]["total"] == 1
+        assert range_body["items"][0]["agent_run_id"] == str(middle_run_id)
+        assert from_response.status_code == 200
+        assert from_body["page"]["total"] == 2
+        assert [item["agent_run_id"] for item in from_body["items"]] == [
+            str(new_run_id),
+            str(middle_run_id),
+        ]
+        assert to_response.status_code == 200
+        assert to_body["page"]["total"] == 2
+        assert [item["agent_run_id"] for item in to_body["items"]] == [
+            str(middle_run_id),
+            str(old_run_id),
+        ]
+    finally:
+        db.close()
+
+
 def test_list_query_run_endpoint_rejects_invalid_status_filter() -> None:
     db = create_test_db()
     try:
@@ -1109,6 +1185,51 @@ def test_list_query_run_endpoint_rejects_invalid_status_filter() -> None:
             response = client.get("/query?page=1&size=20&status=unknown")
 
         assert response.status_code == 422
+    finally:
+        db.close()
+
+
+def test_list_query_run_endpoint_rejects_invalid_created_at_filter() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.get("/query?page=1&size=20&created_from=not-a-date")
+
+        assert response.status_code == 422
+    finally:
+        db.close()
+
+
+def test_list_query_run_endpoint_rejects_reversed_created_at_filter() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.get(
+                "/query?page=1&size=20"
+                "&created_from=2026-01-15T00:00:00Z"
+                "&created_to=2026-01-05T00:00:00Z"
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "created_from must be before or equal to created_to"
+        )
     finally:
         db.close()
 

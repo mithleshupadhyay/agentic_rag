@@ -879,6 +879,8 @@ GET /query
   `failed`, and `cancelled`.
 - Supports optional `verification_status` filtering with `not_required`,
   `passed`, `failed`, and `skipped`.
+- Supports optional inclusive `created_from` and `created_to` datetime
+  filtering against query-run creation time.
 
 GET /query/{agent_run_id}
 - Returns one tenant-scoped query run by run id.

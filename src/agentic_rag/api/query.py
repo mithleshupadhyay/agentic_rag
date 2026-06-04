@@ -2,6 +2,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -452,6 +453,8 @@ def list_query_run_endpoint(
     request_id: str | None = None,
     status: QueryRunStatus | None = None,
     verification_status: AnswerVerificationStatus | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     user_context: UserContext = Depends(require_scope("query:run")),
     db: Session = Depends(get_session),
 ) -> QueryRunSearchResponse:
@@ -459,12 +462,33 @@ def list_query_run_endpoint(
         raise HTTPException(status_code=422, detail="page must be greater than or equal to 1")
     if size < 1 or size > 500:
         raise HTTPException(status_code=422, detail="size must be between 1 and 500")
+    if created_from and created_to:
+        created_from_has_timezone = (
+            created_from.tzinfo is not None
+            and created_from.utcoffset() is not None
+        )
+        created_to_has_timezone = (
+            created_to.tzinfo is not None
+            and created_to.utcoffset() is not None
+        )
+        if created_from_has_timezone != created_to_has_timezone:
+            raise HTTPException(
+                status_code=422,
+                detail="created_from and created_to must use the same timezone style",
+            )
+        if created_from > created_to:
+            raise HTTPException(
+                status_code=422,
+                detail="created_from must be before or equal to created_to",
+            )
 
     logger.info(
         f"[QueryAPI] Listing query runs tenant={user_context.tenant_id} "
         f"user={user_context.id} page={page} size={size} "
         f"request_id={request_id} status={status.value if status else None} "
-        f"verification_status={verification_status.value if verification_status else None}"
+        f"verification_status={verification_status.value if verification_status else None} "
+        f"created_from={created_from.isoformat() if created_from else None} "
+        f"created_to={created_to.isoformat() if created_to else None}"
     )
     effective_workspace_id = workspace_id
     if user_context.workspace_id:
@@ -497,6 +521,8 @@ def list_query_run_endpoint(
         request_id=request_id,
         status=status,
         verification_status=verification_status,
+        created_from=created_from,
+        created_to=created_to,
     )
     logger.info(
         f"[QueryAPI] Listed {len(query_runs)} query runs tenant={user_context.tenant_id} "
