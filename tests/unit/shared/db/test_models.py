@@ -58,12 +58,18 @@ def test_redis_and_llm_circuit_breaker_settings() -> None:
     settings = Settings(
         REDIS_URL="redis://redis:6379/1",
         REDIS_SOCKET_TIMEOUT_SECONDS=2.5,
+        QUERY_CACHE_ENABLED=True,
+        QUERY_CACHE_TTL_SECONDS=120,
+        QUERY_CACHE_KEY_PREFIX="agentic-rag:test:query",
         LLM_CIRCUIT_BREAKER_STATE_BACKEND="redis",
         LLM_CIRCUIT_BREAKER_REDIS_KEY_PREFIX="agentic-rag:test:circuit",
     )
 
     assert settings.redis_url == "redis://redis:6379/1"
     assert settings.redis_socket_timeout_seconds == 2.5
+    assert settings.query_cache_enabled is True
+    assert settings.query_cache_ttl_seconds == 120
+    assert settings.query_cache_key_prefix == "agentic-rag:test:query"
     assert settings.llm_circuit_breaker_state_backend == "redis"
     assert settings.llm_circuit_breaker_redis_key_prefix == "agentic-rag:test:circuit"
 

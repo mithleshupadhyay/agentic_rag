@@ -712,6 +712,15 @@ context building, deterministic confidence scoring, and deterministic answer
 verification first. Later steps add planner/tool routing, reformulation, vector
 search, web search, and full agent runtime.
 
+The BM25 query path can optionally check Redis for a completed response before
+running retrieval. The cache key is scoped by tenant, workspace, user, roles,
+groups, scopes, ACL version, retrieval filters, limits, retrieval strategy, and
+LLM synthesis/model settings. Cached responses are returned under the current
+`agent_run_id` and persisted as a normal completed query run when query-run
+storage is active. Redis failures, invalid cache payloads, and cache write
+failures are logged and fall back to the normal retrieval path without failing
+the query.
+
 Current query metrics are defined in `src/agentic_rag/monitoring/metrics.py`
 and exposed through the existing `/metrics` endpoint:
 
@@ -1109,6 +1118,10 @@ LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
 LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS=60
 LLM_TIMEOUT_SECONDS=30
 REDIS_URL=redis://localhost:6379/0
+REDIS_SOCKET_TIMEOUT_SECONDS=1
+QUERY_CACHE_ENABLED=false
+QUERY_CACHE_TTL_SECONDS=300
+QUERY_CACHE_KEY_PREFIX=agentic-rag:query
 EMBEDDING_PROVIDER=litellm
 EMBEDDING_MODEL_NAME=gemini/gemini-embedding-001
 EMBEDDING_DIMENSION=768

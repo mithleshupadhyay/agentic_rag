@@ -1,8 +1,12 @@
+import hashlib
+import json
 import logging
 import time
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from redis import Redis
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
@@ -68,6 +72,87 @@ def run_bm25_query(
         )
 
     try:
+        redis_client = None
+        query_cache_key = None
+        if settings.query_cache_enabled:
+            try:
+                # Build an authorization-scoped cache key.
+                query_cache_payload = {
+                    "tenant_id": user_context.tenant_id,
+                    "workspace_id": filters.workspace_id or user_context.workspace_id,
+                    "user_id": user_context.id,
+                    "roles": sorted(user_context.roles or []),
+                    "group_ids": sorted(user_context.group_ids or []),
+                    "scopes": sorted(user_context.scopes or []),
+                    "acl_version": user_context.acl_version,
+                    "query": query_text,
+                    "filters": filters.model_dump(mode="json"),
+                    "retrieval_limit": request.retrieval_limit,
+                    "max_context_chunks": request.max_context_chunks,
+                    "max_context_tokens": request.max_context_tokens,
+                    "retrieval_strategy": RetrievalStrategy.BM25.value,
+                    "llm_synthesis_enabled": settings.llm_synthesis_enabled,
+                    "llm_provider": settings.llm_provider,
+                    "llm_model": settings.default_llm_model,
+                }
+                query_cache_json = json.dumps(
+                    query_cache_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                query_cache_hash = hashlib.sha256(
+                    query_cache_json.encode("utf-8")
+                ).hexdigest()
+                query_cache_key = (
+                    f"{settings.query_cache_key_prefix}:bm25:{query_cache_hash}"
+                )
+                redis_client = Redis.from_url(
+                    settings.redis_url,
+                    socket_timeout=settings.redis_socket_timeout_seconds,
+                    socket_connect_timeout=settings.redis_socket_timeout_seconds,
+                )
+                cached_payload = redis_client.get(query_cache_key)
+                if cached_payload:
+                    # Return the cached answer under the current run id.
+                    cached_text = (
+                        cached_payload.decode("utf-8")
+                        if isinstance(cached_payload, bytes)
+                        else str(cached_payload)
+                    )
+                    cached_data = json.loads(cached_text)
+                    cached_data["agent_run_id"] = str(agent_run_id)
+                    cached_data["latency_ms"] = max(
+                        0,
+                        int((time.perf_counter() - started_at) * 1000),
+                    )
+                    response = QueryResponse.model_validate(cached_data)
+                    if db is not None and query_run is not None:
+                        mark_query_run_completed(
+                            db=db,
+                            query_run=query_run,
+                            response=response,
+                        )
+                    logger.info(
+                        f"[Query] BM25 query cache hit tenant={user_context.tenant_id} "
+                        f"user={user_context.id} request_id={request_id} "
+                        f"cache_key_hash={query_cache_hash}"
+                    )
+                    return response
+
+                logger.info(
+                    f"[Query] BM25 query cache miss tenant={user_context.tenant_id} "
+                    f"user={user_context.id} request_id={request_id} "
+                    f"cache_key_hash={query_cache_hash}"
+                )
+            except (RedisError, TypeError, ValueError) as e:
+                logger.warning(
+                    f"[Query] BM25 query cache skipped tenant={user_context.tenant_id} "
+                    f"user={user_context.id} request_id={request_id} "
+                    f"error_type={type(e).__name__}"
+                )
+                redis_client = None
+                query_cache_key = None
+
         retrieval_response = search_bm25_chunks(
             user_context=user_context,
             query=query_text,
@@ -263,6 +348,29 @@ def run_bm25_query(
                 query_run=query_run,
                 response=response,
             )
+        if settings.query_cache_enabled and redis_client is not None and query_cache_key:
+            try:
+                # Store only a successful response payload.
+                redis_client.setex(
+                    query_cache_key,
+                    settings.query_cache_ttl_seconds,
+                    json.dumps(
+                        response.model_dump(mode="json"),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+                logger.info(
+                    f"[Query] BM25 query cached tenant={user_context.tenant_id} "
+                    f"user={user_context.id} request_id={request_id} "
+                    f"ttl_seconds={settings.query_cache_ttl_seconds}"
+                )
+            except (RedisError, TypeError, ValueError) as e:
+                logger.warning(
+                    f"[Query] BM25 query cache write skipped "
+                    f"tenant={user_context.tenant_id} user={user_context.id} "
+                    f"request_id={request_id} error_type={type(e).__name__}"
+                )
         return response
 
     except Exception as e:

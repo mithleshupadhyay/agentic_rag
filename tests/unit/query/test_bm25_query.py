@@ -1,7 +1,9 @@
+import json
 from uuid import uuid4
 
 from fastapi import HTTPException
 import pytest
+from redis.exceptions import RedisError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,31 @@ from agentic_rag.shared.schemas.retrieval import (
     RetrievalStrategy,
     RetrievalTool,
 )
+
+
+class FakeQueryCacheRedis:
+    def __init__(
+        self,
+        cached_payload: bytes | None = None,
+        fail_get: bool = False,
+        fail_set: bool = False,
+    ) -> None:
+        self.cached_payload = cached_payload
+        self.fail_get = fail_get
+        self.fail_set = fail_set
+        self.get_calls: list[str] = []
+        self.setex_calls: list[tuple[str, int, str]] = []
+
+    def get(self, key: str):
+        self.get_calls.append(key)
+        if self.fail_get:
+            raise RedisError("redis unavailable")
+        return self.cached_payload
+
+    def setex(self, key: str, ttl_seconds: int, payload: str):
+        self.setex_calls.append((key, ttl_seconds, payload))
+        if self.fail_set:
+            raise RedisError("redis write unavailable")
 
 
 def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
@@ -508,6 +535,225 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.llm_cost_estimate == 0.0
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.citations["items"][0]["title"] == "Security Policy"
+
+
+def test_run_bm25_query_returns_cached_response(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    agent_run_id = uuid4()
+    cached_run_id = uuid4()
+    cached_payload = {
+        "agent_run_id": str(cached_run_id),
+        "answer": "Cached answer from authorized context.",
+        "citations": [],
+        "candidates": [],
+        "context": [],
+        "context_token_count": 0,
+        "confidence_score": 0.44,
+        "retrieval_strategy": "bm25",
+        "latency_ms": 999,
+        "synthesis_enabled": False,
+        "llm_provider": None,
+        "llm_model": None,
+        "llm_input_tokens": 0,
+        "llm_output_tokens": 0,
+        "llm_cost_estimate": 0.0,
+        "synthesis_error": None,
+    }
+    fake_redis = FakeQueryCacheRedis(json.dumps(cached_payload).encode("utf-8"))
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        raise AssertionError("search should not run on cache hit")
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.Redis.from_url",
+        lambda *args, **kwargs: fake_redis,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_key_prefix",
+        "agentic-rag:test:query",
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            roles=["reader"],
+            group_ids=["security"],
+            scopes=["query:run"],
+            acl_version=2,
+        )
+
+        response = run_bm25_query(
+            user_context=user_context,
+            request=QueryRequest(
+                query="security policy",
+                workspace_id="workspace-a",
+            ),
+            db=db,
+            request_id="request-id-cache-hit",
+            agent_run_id=agent_run_id,
+        )
+        query_run = db.query(QueryRun).filter(QueryRun.id == agent_run_id).one()
+
+        assert response.agent_run_id == agent_run_id
+        assert response.answer == "Cached answer from authorized context."
+        assert response.confidence_score == 0.44
+        assert response.latency_ms >= 0
+        assert query_run.status == "completed"
+        assert query_run.response_payload["agent_run_id"] == str(agent_run_id)
+        assert query_run.answer == "Cached answer from authorized context."
+        assert fake_redis.get_calls[0].startswith("agentic-rag:test:query:bm25:")
+        assert "security policy" not in fake_redis.get_calls[0]
+        assert fake_redis.setex_calls == []
+
+
+def test_run_bm25_query_writes_response_to_cache_on_miss(monkeypatch) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    fake_redis = FakeQueryCacheRedis()
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Security policy content.",
+                    score=2.3,
+                    source=RetrievalTool.BM25_SEARCH,
+                    metadata={"token_count": 3},
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=2.3,
+                    ),
+                )
+            ],
+            latency_ms=11,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.Redis.from_url",
+        lambda *args, **kwargs: fake_redis,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_ttl_seconds",
+        60,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_key_prefix",
+        "agentic-rag:test:query",
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+
+    response = run_bm25_query(
+        user_context=user_context,
+        request=QueryRequest(query="security policy"),
+    )
+    cached_key, ttl_seconds, cached_payload = fake_redis.setex_calls[0]
+    cached_data = json.loads(cached_payload)
+
+    assert response.answer.startswith("LLM synthesis is not enabled yet")
+    assert cached_key.startswith("agentic-rag:test:query:bm25:")
+    assert ttl_seconds == 60
+    assert cached_data["answer"] == response.answer
+    assert cached_data["confidence_score"] == response.confidence_score
+    assert cached_data["retrieval_strategy"] == "bm25"
+    assert "security policy" not in cached_key
+
+
+def test_run_bm25_query_falls_back_when_cache_is_unavailable(monkeypatch) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    fake_redis = FakeQueryCacheRedis(fail_get=True)
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Security policy content.",
+                    score=2.3,
+                    source=RetrievalTool.BM25_SEARCH,
+                    metadata={"token_count": 3},
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=2.3,
+                    ),
+                )
+            ],
+            latency_ms=11,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.Redis.from_url",
+        lambda *args, **kwargs: fake_redis,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+        True,
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+
+    response = run_bm25_query(
+        user_context=user_context,
+        request=QueryRequest(query="security policy"),
+    )
+
+    assert response.context[0].content == "Security policy content."
+    assert response.citations[0].title == "Security Policy"
+    assert response.confidence_score == 0.58
+    assert fake_redis.get_calls
+    assert fake_redis.setex_calls == []
 
 
 def test_run_bm25_query_marks_query_run_failed(monkeypatch) -> None:

@@ -49,6 +49,20 @@ class Settings(BaseSettings):
         le=30.0,
         validation_alias="REDIS_SOCKET_TIMEOUT_SECONDS",
     )
+    query_cache_enabled: bool = Field(
+        default=False,
+        validation_alias="QUERY_CACHE_ENABLED",
+    )
+    query_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=86400,
+        validation_alias="QUERY_CACHE_TTL_SECONDS",
+    )
+    query_cache_key_prefix: str = Field(
+        default="agentic-rag:query",
+        validation_alias="QUERY_CACHE_KEY_PREFIX",
+    )
     kafka_publishing_enabled: bool = Field(
         default=False,
         validation_alias="KAFKA_PUBLISHING_ENABLED",
