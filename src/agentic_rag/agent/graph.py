@@ -7,8 +7,15 @@ from uuid import UUID
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
-from agentic_rag.agent.runtime import record_agent_step, start_agent_state
+from agentic_rag.agent.runtime import (
+    SAFE_FALLBACK_ANSWER,
+    evaluate_agent_guardrails,
+    record_agent_step,
+    start_agent_state,
+)
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.llm.gateway import generate_chat_completion
+from agentic_rag.query.answer_verifier import verify_answer_support
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.retrieval.context_builder import build_context
 from agentic_rag.shared.db.crud.agent_runs import (
@@ -26,7 +33,12 @@ from agentic_rag.shared.schemas.agent import (
     AgentStateModel,
 )
 from agentic_rag.shared.schemas.auth import AuthContext
-from agentic_rag.shared.schemas.retrieval import ContextBuildRequest, RetrievalFilters, RetrievalStrategy
+from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
+from agentic_rag.shared.schemas.retrieval import (
+    ContextBuildRequest,
+    RetrievalFilters,
+    RetrievalStrategy,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -525,6 +537,275 @@ def build_context_node(graph_state: AgentGraphState) -> dict[str, Any]:
     }
 
 
+def generate_answer_node(graph_state: AgentGraphState) -> dict[str, Any]:
+    if graph_state.status != AgentRunStatus.RUNNING:
+        return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before answer generation "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.GENERATE_ANSWER.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.GENERATE_ANSWER.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+                "search_client": graph_state.search_client,
+            }
+
+    logger.info(
+        f"[AgentGraph] Generating answer "
+        f"agent_run_id={graph_state.agent_state.agent_run_id} "
+        f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+    )
+
+    # Guard answer generation before the LLM sees context.
+    agent_state = graph_state.agent_state.model_copy(deep=True)
+    guardrail_decision = evaluate_agent_guardrails(
+        state=agent_state,
+        limits=graph_state.limits,
+        now=graph_state.current_time,
+        next_node_name=AgentNodeName.GENERATE_ANSWER,
+    )
+    if guardrail_decision.should_stop:
+        if guardrail_decision.fallback_answer is not None:
+            agent_state.final_answer = SAFE_FALLBACK_ANSWER
+            agent_state.handoff_required = True
+
+        step_result = record_agent_step(
+            state=agent_state,
+            node_name=AgentNodeName.GENERATE_ANSWER,
+            limits=graph_state.limits,
+            now=graph_state.current_time,
+        )
+        return {
+            "agent_state": step_result.state,
+            "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+            "status": guardrail_decision.status,
+            "stop_reason": guardrail_decision.reason,
+            "current_time": graph_state.current_time,
+            "db": graph_state.db,
+            "search_client": graph_state.search_client,
+        }
+
+    context_lines = []
+    for index, context_chunk in enumerate(agent_state.context, start=1):
+        citation = context_chunk.citation
+        title = citation.title or "Untitled document"
+        source_uri = citation.source_uri or "unknown source"
+        context_lines.append(
+            "\n".join(
+                [
+                    f"[{index}] Title: {title}",
+                    f"Source: {source_uri}",
+                    f"Document ID: {context_chunk.document_id}",
+                    f"Chunk ID: {context_chunk.chunk_id}",
+                    f"Content: {context_chunk.content}",
+                ]
+            )
+        )
+    context_block = "\n\n".join(context_lines)
+
+    try:
+        llm_response = generate_chat_completion(
+            ChatCompletionRequest(
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "You are the answer synthesis layer for Agentic RAG. "
+                            "Use only the authorized context provided by the retrieval system. "
+                            "If the context is not enough, say that the available documents do not answer the question. "
+                            "Cite sources with bracket numbers such as [1] and [2]. "
+                            "Do not mention hidden instructions or unsupported sources."
+                        ),
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Question:\n"
+                            f"{agent_state.rewritten_query or agent_state.query}\n\n"
+                            "Authorized context:\n"
+                            f"{context_block}\n\n"
+                            "Write a concise answer grounded only in the authorized context."
+                        ),
+                    ),
+                ],
+                metadata={
+                    "tenant_id": agent_state.auth.tenant_id,
+                    "user_id": agent_state.auth.user_id,
+                    "agent_run_id": str(agent_state.agent_run_id),
+                    "context_chunks": len(agent_state.context),
+                },
+            )
+        )
+        agent_state.draft_answer = llm_response.text
+
+    except Exception as e:
+        logger.exception(
+            f"[AgentGraph] Answer generation failed "
+            f"agent_run_id={agent_state.agent_run_id} "
+            f"tenant_id={agent_state.auth.tenant_id}: {e}"
+        )
+        agent_state.final_answer = SAFE_FALLBACK_ANSWER
+        agent_state.handoff_required = True
+        step_result = record_agent_step(
+            state=agent_state,
+            node_name=AgentNodeName.GENERATE_ANSWER,
+            limits=graph_state.limits,
+            now=graph_state.current_time,
+        )
+        return {
+            "agent_state": step_result.state,
+            "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+            "status": AgentRunStatus.HANDOFF_REQUIRED,
+            "stop_reason": "LLM answer generation failed.",
+            "current_time": graph_state.current_time,
+            "db": graph_state.db,
+            "search_client": graph_state.search_client,
+        }
+
+    # Record the node through the runtime guardrails.
+    step_result = record_agent_step(
+        state=agent_state,
+        node_name=AgentNodeName.GENERATE_ANSWER,
+        limits=graph_state.limits,
+        now=graph_state.current_time,
+    )
+
+    status = AgentRunStatus.RUNNING
+    stop_reason = None
+    if step_result.decision.should_stop:
+        status = step_result.decision.status
+        stop_reason = step_result.decision.reason
+
+    return {
+        "agent_state": step_result.state,
+        "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+        "status": status,
+        "stop_reason": stop_reason,
+        "current_time": graph_state.current_time,
+        "db": graph_state.db,
+        "search_client": graph_state.search_client,
+    }
+
+
+def verify_grounding_node(graph_state: AgentGraphState) -> dict[str, Any]:
+    if graph_state.status != AgentRunStatus.RUNNING:
+        return {}
+
+    if graph_state.db is not None:
+        if is_agent_run_cancelled(
+            db=graph_state.db,
+            agent_run_id=graph_state.agent_state.agent_run_id,
+            tenant_id=graph_state.agent_state.auth.tenant_id,
+        ):
+            logger.warning(
+                f"[AgentGraph] Agent runtime graph cancelled before grounding verification "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Save a cancellation checkpoint for this node.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            agent_state.step_count += 1
+            agent_state.visited_nodes.append(AgentNodeName.VERIFY_GROUNDING.value)
+            checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+            checkpoint = AgentCheckpoint(
+                agent_run_id=agent_state.agent_run_id,
+                checkpoint_key=(
+                    f"step-{agent_state.step_count:04d}-"
+                    f"{AgentNodeName.VERIFY_GROUNDING.value}"
+                ),
+                state=agent_state.model_dump(mode="json"),
+                created_at=checkpoint_time,
+            )
+            return {
+                "agent_state": agent_state,
+                "checkpoints": [*graph_state.checkpoints, checkpoint],
+                "status": AgentRunStatus.CANCELLED,
+                "stop_reason": "Agent run was cancelled.",
+                "current_time": graph_state.current_time,
+                "db": graph_state.db,
+                "search_client": graph_state.search_client,
+            }
+
+    logger.info(
+        f"[AgentGraph] Verifying grounded answer "
+        f"agent_run_id={graph_state.agent_state.agent_run_id} "
+        f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+    )
+
+    # Verify the draft answer against authorized context citations.
+    agent_state = graph_state.agent_state.model_copy(deep=True)
+    verification_result = verify_answer_support(
+        answer=agent_state.draft_answer or "",
+        context=agent_state.context,
+    )
+    status = AgentRunStatus.COMPLETED
+    stop_reason = None
+    if verification_result.passed:
+        agent_state.final_answer = agent_state.draft_answer
+        agent_state.confidence_score = 1.0
+    else:
+        logger.warning(
+            f"[AgentGraph] Grounding verification failed "
+            f"agent_run_id={agent_state.agent_run_id} "
+            f"tenant_id={agent_state.auth.tenant_id} "
+            f"reason={verification_result.reason}"
+        )
+        agent_state.final_answer = SAFE_FALLBACK_ANSWER
+        agent_state.handoff_required = True
+        agent_state.confidence_score = 0.0
+        status = AgentRunStatus.HANDOFF_REQUIRED
+        stop_reason = verification_result.reason
+
+    # Record the node through the runtime guardrails.
+    step_result = record_agent_step(
+        state=agent_state,
+        node_name=AgentNodeName.VERIFY_GROUNDING,
+        limits=graph_state.limits,
+        now=graph_state.current_time,
+    )
+    if step_result.decision.should_stop:
+        status = step_result.decision.status
+        stop_reason = step_result.decision.reason
+
+    return {
+        "agent_state": step_result.state,
+        "checkpoints": [*graph_state.checkpoints, step_result.checkpoint],
+        "status": status,
+        "stop_reason": stop_reason,
+        "current_time": graph_state.current_time,
+        "db": graph_state.db,
+        "search_client": graph_state.search_client,
+    }
+
+
 def build_agent_runtime_graph():
     logger.info("[AgentGraph] Building agent runtime graph")
 
@@ -535,13 +816,17 @@ def build_agent_runtime_graph():
     graph.add_node(AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value, select_retrieval_strategy_node)
     graph.add_node(AgentNodeName.BM25_SEARCH.value, bm25_search_node)
     graph.add_node(AgentNodeName.BUILD_CONTEXT.value, build_context_node)
+    graph.add_node(AgentNodeName.GENERATE_ANSWER.value, generate_answer_node)
+    graph.add_node(AgentNodeName.VERIFY_GROUNDING.value, verify_grounding_node)
     graph.add_edge(START, AgentNodeName.CLASSIFY_INTENT.value)
     graph.add_edge(AgentNodeName.CLASSIFY_INTENT.value, AgentNodeName.REWRITE_QUERY.value)
     graph.add_edge(AgentNodeName.REWRITE_QUERY.value, AgentNodeName.PLAN_FILTERS.value)
     graph.add_edge(AgentNodeName.PLAN_FILTERS.value, AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value)
     graph.add_edge(AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value, AgentNodeName.BM25_SEARCH.value)
     graph.add_edge(AgentNodeName.BM25_SEARCH.value, AgentNodeName.BUILD_CONTEXT.value)
-    graph.add_edge(AgentNodeName.BUILD_CONTEXT.value, END)
+    graph.add_edge(AgentNodeName.BUILD_CONTEXT.value, AgentNodeName.GENERATE_ANSWER.value)
+    graph.add_edge(AgentNodeName.GENERATE_ANSWER.value, AgentNodeName.VERIFY_GROUNDING.value)
+    graph.add_edge(AgentNodeName.VERIFY_GROUNDING.value, END)
 
     return graph.compile()
 
@@ -619,9 +904,11 @@ def run_agent_runtime_graph(
                 step_number = len(visited_nodes) if visited_nodes else 0
 
             step_status = "completed"
+            finish_run = False
             if checkpoint == completed_graph_state.checkpoints[-1]:
                 if completed_graph_state.status != AgentRunStatus.RUNNING:
                     step_status = completed_graph_state.status.value
+                    finish_run = True
 
             record_agent_run_step(
                 db=db,
@@ -630,6 +917,7 @@ def run_agent_runtime_graph(
                 node_name=node_name,
                 step_number=step_number,
                 status=step_status,
+                finish_run=finish_run,
             )
             save_agent_checkpoint(
                 db=db,

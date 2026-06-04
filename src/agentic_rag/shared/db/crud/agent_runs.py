@@ -170,6 +170,7 @@ def record_agent_run_step(
     node_name: AgentNodeName | str,
     step_number: int,
     status: str = "completed",
+    finish_run: bool = False,
     tool_call: Optional[ToolCallRecord] = None,
     latency_ms: Optional[int] = None,
     error_type: Optional[str] = None,
@@ -219,12 +220,16 @@ def record_agent_run_step(
     agent_run.total_steps = max(agent_run.total_steps, step_number)
     if tool_call is not None:
         agent_run.total_tool_calls += 1
-    if status in {
-        AgentRunStatus.HANDOFF_REQUIRED.value,
-        AgentRunStatus.TIMED_OUT.value,
-        AgentRunStatus.FAILED.value,
-        AgentRunStatus.CANCELLED.value,
-    }:
+    if (
+        status
+        in {
+            AgentRunStatus.HANDOFF_REQUIRED.value,
+            AgentRunStatus.TIMED_OUT.value,
+            AgentRunStatus.FAILED.value,
+            AgentRunStatus.CANCELLED.value,
+        }
+        or (finish_run and status == AgentRunStatus.COMPLETED.value)
+    ):
         agent_run.status = status
         agent_run.completed_at = datetime.now(timezone.utc)
 

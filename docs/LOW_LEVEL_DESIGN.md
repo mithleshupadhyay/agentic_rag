@@ -973,10 +973,14 @@ and returns an `AgentCheckpoint` payload after each recorded node.
 The local LangGraph implementation compiles a controlled graph around the
 runtime guardrails. It runs deterministic planning nodes for intent
 classification, query rewrite, filter planning, retrieval strategy selection,
-BM25 retrieval, and context building. The BM25 node calls the existing retrieval
-service, which applies tenant, workspace, role, group, ACL version, deny-list,
-and visibility filters before candidates enter graph state. The context node
-then builds safe context and citations from those authorized candidates.
+BM25 retrieval, context building, answer generation, and grounding
+verification. The BM25 node calls the existing retrieval service, which applies
+tenant, workspace, role, group, ACL version, deny-list, and visibility filters
+before candidates enter graph state. The context node then builds safe context
+and citations from those authorized candidates. The answer generation node calls
+the LLM gateway only after the runtime guardrail confirms authorized context is
+available. The grounding node verifies generated citation numbers against the
+authorized context before the graph returns a completed answer.
 
 The local persistence layer now has tenant-scoped `agent_runs`, `agent_steps`,
 and `agent_checkpoints` tables. The CRUD layer can create an agent run, record a
@@ -992,9 +996,8 @@ failure, or cancellation.
 The graph also checks the persisted agent run status before each node starts
 when a database session is available. If another flow has cancelled the run, the
 graph records a final cancellation checkpoint for that node, stops with
-`cancelled`, and persists the cancelled step status. This graph still
-intentionally stops before answer generation. It does not add internal API
-endpoints, LLM calls, or streaming events yet.
+`cancelled`, and persists the cancelled step status. This graph does not add
+internal API endpoints or streaming events yet.
 
 ### LLM Gateway
 

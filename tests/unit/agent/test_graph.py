@@ -19,43 +19,47 @@ from agentic_rag.shared.schemas.agent import (
     AgentRunStatus,
 )
 from agentic_rag.shared.schemas.auth import AuthContext
+from agentic_rag.shared.schemas.llm import LLMResponse
 from agentic_rag.shared.schemas.retrieval import RetrievalFilters, RetrievalStrategy
 
 
 class FakeSearchClient:
-    def __init__(self):
+    def __init__(self, hits=None):
         self.document_id = uuid4()
         self.chunk_id = uuid4()
         self.search_body = None
+        self.hits = hits
+        if self.hits is None:
+            self.hits = [
+                {
+                    "_score": 3.25,
+                    "_source": {
+                        "tenant_id": "tenant-a",
+                        "workspace_id": "workspace-a",
+                        "document_id": str(self.document_id),
+                        "chunk_id": str(self.chunk_id),
+                        "chunk_index": 1,
+                        "content": "Full chunk content about incident response policy.",
+                        "token_count": 7,
+                        "section_path": "Security / Incident Response",
+                        "page_number": 2,
+                        "start_offset": 10,
+                        "end_offset": 48,
+                        "document_title": "Incident Response Policy",
+                        "file_name": "incident-response.md",
+                        "source_type": "upload",
+                        "source_uri": "upload://incident-response.md",
+                        "classification_level": "internal",
+                    },
+                    "highlight": {
+                        "content": ["Highlighted incident response policy content."]
+                    },
+                },
+            ]
 
     def search_chunks_bm25(self, search_body):
         self.search_body = search_body
-        return [
-            {
-                "_score": 3.25,
-                "_source": {
-                    "tenant_id": "tenant-a",
-                    "workspace_id": "workspace-a",
-                    "document_id": str(self.document_id),
-                    "chunk_id": str(self.chunk_id),
-                    "chunk_index": 1,
-                    "content": "Full chunk content about incident response policy.",
-                    "token_count": 7,
-                    "section_path": "Security / Incident Response",
-                    "page_number": 2,
-                    "start_offset": 10,
-                    "end_offset": 48,
-                    "document_title": "Incident Response Policy",
-                    "file_name": "incident-response.md",
-                    "source_type": "upload",
-                    "source_uri": "upload://incident-response.md",
-                    "classification_level": "internal",
-                },
-                "highlight": {
-                    "content": ["Highlighted incident response policy content."]
-                },
-            }
-        ]
+        return self.hits
 
     def close(self):
         return None
@@ -70,10 +74,13 @@ def db() -> Iterator[Session]:
         yield session
 
 
-def test_run_agent_runtime_graph_reaches_context_boundary() -> None:
+def test_run_agent_runtime_graph_generates_verified_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     agent_run_id = uuid4()
     search_client = FakeSearchClient()
+    captured_llm_requests = []
     auth = AuthContext(
         user_id="user-1",
         tenant_id="tenant-a",
@@ -81,6 +88,25 @@ def test_run_agent_runtime_graph_reaches_context_boundary() -> None:
         roles=["analyst"],
         group_ids=["security"],
         acl_version=4,
+    )
+
+    def fake_generate_chat_completion(request):
+        captured_llm_requests.append(request)
+        return LLMResponse(
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        )
+
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        fake_generate_chat_completion,
     )
 
     result = run_agent_runtime_graph(
@@ -97,7 +123,7 @@ def test_run_agent_runtime_graph_reaches_context_boundary() -> None:
     must_not_clauses = bool_query["must_not"]
     acl_should = filter_clauses[-1]["bool"]["should"]
 
-    assert result.status == AgentRunStatus.RUNNING
+    assert result.status == AgentRunStatus.COMPLETED
     assert result.stop_reason is None
     assert result.state.agent_run_id == agent_run_id
     assert result.state.auth == auth
@@ -105,12 +131,22 @@ def test_run_agent_runtime_graph_reaches_context_boundary() -> None:
     assert result.state.rewritten_query == "Find the incident response policy"
     assert result.state.filters == {"query": "Find the incident response policy"}
     assert result.state.retrieval_strategy == RetrievalStrategy.BM25
-    assert result.state.step_count == 6
+    assert result.state.step_count == 8
     assert result.state.tool_call_count == 0
     assert len(result.state.retrieved_candidates) == 1
     assert len(result.state.authorized_chunks) == 1
     assert len(result.state.context) == 1
     assert len(result.state.citations) == 1
+    assert result.state.draft_answer == "The incident response policy content was found [1]."
+    assert result.state.final_answer == "The incident response policy content was found [1]."
+    assert result.state.confidence_score == 1.0
+    assert len(captured_llm_requests) == 1
+    assert captured_llm_requests[0].metadata["tenant_id"] == "tenant-a"
+    assert captured_llm_requests[0].metadata["user_id"] == "user-1"
+    assert captured_llm_requests[0].metadata["context_chunks"] == 1
+    assert "Highlighted incident response policy content." in (
+        captured_llm_requests[0].messages[1].content
+    )
     assert result.state.context[0].content == "Highlighted incident response policy content."
     assert {"term": {"tenant_id": "tenant-a"}} in filter_clauses
     assert {"term": {"workspace_id": "workspace-a"}} in filter_clauses
@@ -126,11 +162,30 @@ def test_run_agent_runtime_graph_reaches_context_boundary() -> None:
         AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value,
         AgentNodeName.BM25_SEARCH.value,
         AgentNodeName.BUILD_CONTEXT.value,
+        AgentNodeName.GENERATE_ANSWER.value,
+        AgentNodeName.VERIFY_GROUNDING.value,
     ]
 
 
-def test_run_agent_runtime_graph_returns_checkpoints_for_each_node() -> None:
+def test_run_agent_runtime_graph_returns_checkpoints_for_each_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        lambda request: LLMResponse(
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        ),
+    )
+
     result = run_agent_runtime_graph(
         agent_run_id=uuid4(),
         auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
@@ -139,7 +194,7 @@ def test_run_agent_runtime_graph_returns_checkpoints_for_each_node() -> None:
         search_client=FakeSearchClient(),
     )
 
-    assert len(result.checkpoints) == 6
+    assert len(result.checkpoints) == 8
     assert result.checkpoints[0].checkpoint_key == "step-0001-classify_intent"
     assert result.checkpoints[1].checkpoint_key == "step-0002-rewrite_query"
     assert result.checkpoints[2].checkpoint_key == "step-0003-plan_filters"
@@ -148,9 +203,94 @@ def test_run_agent_runtime_graph_returns_checkpoints_for_each_node() -> None:
     )
     assert result.checkpoints[4].checkpoint_key == "step-0005-bm25_search"
     assert result.checkpoints[5].checkpoint_key == "step-0006-build_context"
+    assert result.checkpoints[6].checkpoint_key == "step-0007-generate_answer"
+    assert result.checkpoints[7].checkpoint_key == "step-0008-verify_grounding"
     assert result.checkpoints[-1].state["retrieval_strategy"] == RetrievalStrategy.BM25
-    assert result.checkpoints[-1].state["step_count"] == 6
+    assert result.checkpoints[-1].state["step_count"] == 8
     assert len(result.checkpoints[-1].state["context"]) == 1
+    assert result.checkpoints[-1].state["final_answer"] == (
+        "The incident response policy content was found [1]."
+    )
+
+
+def test_run_agent_runtime_graph_blocks_generation_without_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def fail_if_llm_is_called(request):
+        raise AssertionError("LLM should not be called without authorized context.")
+
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        fail_if_llm_is_called,
+    )
+
+    result = run_agent_runtime_graph(
+        agent_run_id=uuid4(),
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+        now=now,
+        search_client=FakeSearchClient(hits=[]),
+    )
+
+    assert result.status == AgentRunStatus.HANDOFF_REQUIRED
+    assert result.stop_reason == "Answer generation requires authorized context."
+    assert result.state.context == []
+    assert result.state.final_answer == SAFE_FALLBACK_ANSWER
+    assert result.state.handoff_required is True
+    assert result.state.visited_nodes == [
+        AgentNodeName.CLASSIFY_INTENT.value,
+        AgentNodeName.REWRITE_QUERY.value,
+        AgentNodeName.PLAN_FILTERS.value,
+        AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value,
+        AgentNodeName.BM25_SEARCH.value,
+        AgentNodeName.BUILD_CONTEXT.value,
+        AgentNodeName.GENERATE_ANSWER.value,
+    ]
+    assert len(result.checkpoints) == 7
+    assert result.checkpoints[-1].checkpoint_key == "step-0007-generate_answer"
+
+
+def test_run_agent_runtime_graph_rejects_ungrounded_generated_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        lambda request: LLMResponse(
+            text="The incident response policy content was found.",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        ),
+    )
+
+    result = run_agent_runtime_graph(
+        agent_run_id=uuid4(),
+        auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+        query="Find the incident response policy",
+        now=now,
+        search_client=FakeSearchClient(),
+    )
+
+    assert result.status == AgentRunStatus.HANDOFF_REQUIRED
+    assert result.stop_reason == "Answer did not cite retrieved context."
+    assert result.state.draft_answer == "The incident response policy content was found."
+    assert result.state.final_answer == SAFE_FALLBACK_ANSWER
+    assert result.state.handoff_required is True
+    assert result.state.confidence_score == 0.0
+    assert result.state.visited_nodes[-2:] == [
+        AgentNodeName.GENERATE_ANSWER.value,
+        AgentNodeName.VERIFY_GROUNDING.value,
+    ]
+    assert result.checkpoints[-1].checkpoint_key == "step-0008-verify_grounding"
 
 
 def test_run_agent_runtime_graph_stops_when_guardrail_fires() -> None:
@@ -176,10 +316,26 @@ def test_run_agent_runtime_graph_stops_when_guardrail_fires() -> None:
     assert result.checkpoints[-1].state["final_answer"] == SAFE_FALLBACK_ANSWER
 
 
-def test_build_agent_runtime_graph_invokes_existing_state() -> None:
+def test_build_agent_runtime_graph_invokes_existing_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     agent_run_id = uuid4()
     auth = AuthContext(user_id="user-1", tenant_id="tenant-a")
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        lambda request: LLMResponse(
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        ),
+    )
     agent_state = start_agent_state(
         agent_run_id=agent_run_id,
         auth=auth,
@@ -197,14 +353,31 @@ def test_build_agent_runtime_graph_invokes_existing_state() -> None:
     completed_graph_state = AgentGraphState.model_validate(raw_result)
 
     assert completed_graph_state.agent_state.agent_run_id == agent_run_id
-    assert completed_graph_state.status == AgentRunStatus.RUNNING
-    assert completed_graph_state.agent_state.step_count == 6
-    assert len(completed_graph_state.checkpoints) == 6
+    assert completed_graph_state.status == AgentRunStatus.COMPLETED
+    assert completed_graph_state.agent_state.step_count == 8
+    assert len(completed_graph_state.checkpoints) == 8
 
 
-def test_run_agent_runtime_graph_persists_steps_and_checkpoints(db: Session) -> None:
+def test_run_agent_runtime_graph_persists_steps_and_checkpoints(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     agent_run_id = uuid4()
+    monkeypatch.setattr(
+        agent_graph,
+        "generate_chat_completion",
+        lambda request: LLMResponse(
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        ),
+    )
     db.add(
         Tenant(
             tenant_id="tenant-a",
@@ -238,18 +411,22 @@ def test_run_agent_runtime_graph_persists_steps_and_checkpoints(db: Session) -> 
         tenant_id="tenant-a",
     )
 
-    assert result.status == AgentRunStatus.RUNNING
+    assert result.status == AgentRunStatus.COMPLETED
     assert stored is not None
-    assert stored.status == AgentRunStatus.RUNNING.value
+    assert stored.status == AgentRunStatus.COMPLETED.value
+    assert stored.completed_at is not None
     assert stored.tenant_id == "tenant-a"
     assert stored.workspace_id == "workspace-a"
     assert stored.user_id == "user-1"
     assert stored.query_text == "Find the incident response policy"
-    assert stored.total_steps == 6
+    assert stored.total_steps == 8
     assert stored.total_tool_calls == 0
     assert len(result.state.context) == 1
+    assert result.state.final_answer == "The incident response policy content was found [1]."
     assert [step.node_name for step in stored.steps] == result.state.visited_nodes
     assert [step.status for step in stored.steps] == [
+        "completed",
+        "completed",
         "completed",
         "completed",
         "completed",
@@ -264,9 +441,14 @@ def test_run_agent_runtime_graph_persists_steps_and_checkpoints(db: Session) -> 
         "step-0004-select_retrieval_strategy",
         "step-0005-bm25_search",
         "step-0006-build_context",
+        "step-0007-generate_answer",
+        "step-0008-verify_grounding",
     ]
     assert stored.checkpoints[-1].state["retrieval_strategy"] == RetrievalStrategy.BM25
     assert len(stored.checkpoints[-1].state["context"]) == 1
+    assert stored.checkpoints[-1].state["final_answer"] == (
+        "The incident response policy content was found [1]."
+    )
 
 
 def test_run_agent_runtime_graph_persists_guardrail_stop(db: Session) -> None:

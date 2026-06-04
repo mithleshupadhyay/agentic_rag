@@ -61,8 +61,8 @@ retrieval quality, and production operations.
 | `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client. | Add search templates, index aliases, index version rollover, shard/replica tuning, retry policy, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
-| `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add LLM gateway calls and streaming events when those slices are selected. | High |
-| `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, records runtime checkpoints, optionally persists graph steps/checkpoints through agent-run CRUD, and stops before LLM generation. | Wire LLM generation and verification nodes behind the existing budget and grounding gates. | High |
+| `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add streaming events when that slice is selected. | High |
+| `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, and optionally persists graph steps/checkpoints through agent-run CRUD. | Add token-level streaming and richer replay metadata once the API contract is selected. | High |
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
@@ -100,7 +100,7 @@ retrieval quality, and production operations.
 | `tests/unit/search/test_opensearch.py` | OpenSearch client tests. | Add partial bulk failure handling, search error handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
 | `tests/unit/llm/test_gateway.py` | LLM gateway unit tests, including LiteLLM call mapping, request budget rejection, retry behavior, and circuit breaker behavior. | Add provider-specific mocked cases, timeout tests, Redis-backed circuit tests, and no-secret logging tests. | High |
 | `tests/unit/agent/test_runtime.py` | Agent runtime guardrail tests for state initialization, step and tool limits, timeout behavior, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add persistence-backed checkpoint and cancellation tests when those runtime layers are implemented. | High |
-| `tests/unit/agent/test_graph.py` | Agent graph tests for LangGraph node progression, guardrail stop behavior, checkpoint output, persistence-backed graph execution, persisted cancellation stops, and authorized BM25/context building. | Add LLM node tests as those slices land. | High |
+| `tests/unit/agent/test_graph.py` | Agent graph tests for LangGraph node progression, guardrail stop behavior, checkpoint output, persistence-backed graph execution, persisted cancellation stops, authorized BM25/context building, LLM generation, and grounding verification. | Add token streaming tests when that slice lands. | High |
 | `tests/unit/query/test_answer_verifier.py` | Deterministic answer verifier tests for valid citations, missing citations, unknown citations, and no-context behavior. | Add quote-level grounding and confidence scoring tests when verifier logic becomes richer. | High |
 | `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs, metric accounting, and answer-verification fallback. | Add cache/fallback, synthesis handoff edge cases, and no-result response behavior tests. | High |
 | `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests. | Add score threshold, metadata/date filters, no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
@@ -116,6 +116,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Wired LLM answer generation and grounding verification into the agent graph. |
 | 2026-06-04 | Wired authorized BM25 retrieval and context building into the agent graph. |
 | 2026-06-04 | Added persisted agent graph cancellation checks before graph node execution. |
 | 2026-06-04 | Wired agent graph execution to tenant-scoped persisted run, step, and checkpoint storage. |
@@ -138,8 +139,8 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Wire LLM generation and grounding verification into the agent graph behind budget and context guardrails. |
-| 2 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
-| 3 | Add LLM provider health dashboard panels and alert rules from the new circuit-breaker metrics. |
-| 4 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
-| 5 | Add graph replay metadata once LLM nodes are persisted. |
+| 1 | Add token-level LLM streaming once the LLM and agent runtime streaming contracts are stable. |
+| 2 | Add LLM provider health dashboard panels and alert rules from the circuit-breaker metrics. |
+| 3 | Add local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
+| 4 | Add graph replay metadata for persisted retrieval, generation, and verification nodes. |
+| 5 | Add cache lookup and answer confidence calculation to query orchestration. |
