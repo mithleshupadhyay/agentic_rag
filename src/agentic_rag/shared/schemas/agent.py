@@ -25,6 +25,14 @@ class AgentRunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class AgentStreamEventType(StrEnum):
+    AGENT_STARTED = "agent_started"
+    AGENT_STEP_COMPLETED = "agent_step_completed"
+    ANSWER_TOKEN = "answer_token"
+    AGENT_COMPLETED = "agent_completed"
+    AGENT_FAILED = "agent_failed"
+
+
 class AgentNodeName(StrEnum):
     CLASSIFY_INTENT = "classify_intent"
     REWRITE_QUERY = "rewrite_query"
@@ -120,6 +128,17 @@ class AgentCheckpoint(APIModel):
     agent_run_id: UUID
     checkpoint_key: str = Field(..., min_length=1)
     state: dict[str, Any]
+    created_at: datetime
+
+
+class AgentStreamEvent(APIModel):
+    event: AgentStreamEventType
+    agent_run_id: UUID
+    node_name: AgentNodeName | str | None = None
+    status: AgentRunStatus | None = None
+    step_number: int | None = Field(default=None, ge=0)
+    text_delta: str | None = None
+    data: JsonObject = Field(default_factory=dict)
     created_at: datetime
 
 

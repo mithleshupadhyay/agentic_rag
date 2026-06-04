@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -14,7 +15,7 @@ from agentic_rag.agent.runtime import (
     start_agent_state,
 )
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.llm.gateway import generate_chat_completion
+from agentic_rag.llm.gateway import generate_chat_completion, stream_chat_completion
 from agentic_rag.query.answer_verifier import verify_answer_support
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.retrieval.context_builder import build_context
@@ -30,10 +31,16 @@ from agentic_rag.shared.schemas.agent import (
     AgentLimits,
     AgentNodeName,
     AgentRunStatus,
+    AgentStreamEvent,
+    AgentStreamEventType,
     AgentStateModel,
 )
 from agentic_rag.shared.schemas.auth import AuthContext
-from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
+from agentic_rag.shared.schemas.llm import (
+    ChatCompletionRequest,
+    LLMMessage,
+    LLMStreamEventType,
+)
 from agentic_rag.shared.schemas.retrieval import (
     ContextBuildRequest,
     RetrievalFilters,
@@ -939,4 +946,455 @@ def run_agent_runtime_graph(
         checkpoints=completed_graph_state.checkpoints,
         status=completed_graph_state.status,
         stop_reason=completed_graph_state.stop_reason,
+    )
+
+
+def stream_agent_runtime_graph(
+    *,
+    agent_run_id: UUID,
+    auth: AuthContext,
+    query: str,
+    limits: AgentLimits | None = None,
+    retrieval_filters: RetrievalFilters | None = None,
+    retrieval_limit: int = 20,
+    max_context_chunks: int = 12,
+    max_context_tokens: int = 6000,
+    now: datetime | None = None,
+    db: Session | None = None,
+    search_client: Any | None = None,
+) -> Iterator[AgentStreamEvent]:
+    runtime_limits = limits or AgentLimits()
+    runtime_filters = retrieval_filters or RetrievalFilters()
+
+    # Use one UTC clock to initialize the streamed graph run.
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    else:
+        current_time = current_time.astimezone(timezone.utc)
+
+    logger.info(
+        f"[AgentGraph] Starting streamed agent runtime graph "
+        f"agent_run_id={agent_run_id} tenant_id={auth.tenant_id} user_id={auth.user_id}"
+    )
+
+    if db is not None:
+        create_agent_run(
+            db=db,
+            agent_run_id=agent_run_id,
+            auth=auth,
+            query=query,
+            limits=runtime_limits,
+        )
+
+    agent_state = start_agent_state(
+        agent_run_id=agent_run_id,
+        auth=auth,
+        query=query,
+        limits=runtime_limits,
+        now=current_time,
+    )
+    graph_state = AgentGraphState(
+        agent_state=agent_state,
+        limits=runtime_limits,
+        retrieval_filters=runtime_filters,
+        retrieval_limit=retrieval_limit,
+        max_context_chunks=max_context_chunks,
+        max_context_tokens=max_context_tokens,
+        current_time=current_time,
+        db=db,
+        search_client=search_client,
+    )
+    terminal_event_type = AgentStreamEventType.AGENT_COMPLETED
+
+    yield AgentStreamEvent(
+        event=AgentStreamEventType.AGENT_STARTED,
+        agent_run_id=agent_run_id,
+        status=AgentRunStatus.RUNNING,
+        data={
+            "tenant_id": auth.tenant_id,
+            "user_id": auth.user_id,
+            "workspace_id": auth.workspace_id,
+        },
+        created_at=current_time,
+    )
+
+    for node_name, node_function in [
+        (AgentNodeName.CLASSIFY_INTENT, classify_intent_node),
+        (AgentNodeName.REWRITE_QUERY, rewrite_query_node),
+        (AgentNodeName.PLAN_FILTERS, plan_filters_node),
+        (AgentNodeName.SELECT_RETRIEVAL_STRATEGY, select_retrieval_strategy_node),
+        (AgentNodeName.BM25_SEARCH, bm25_search_node),
+        (AgentNodeName.BUILD_CONTEXT, build_context_node),
+    ]:
+        raw_result = node_function(graph_state)
+        if raw_result:
+            graph_state = graph_state.model_copy(update=raw_result)
+
+        if graph_state.checkpoints:
+            checkpoint = graph_state.checkpoints[-1]
+            visited_nodes = checkpoint.state.get("visited_nodes", [])
+            event_node_name = node_name.value
+            if visited_nodes:
+                event_node_name = visited_nodes[-1]
+            step_number = checkpoint.state.get("step_count")
+            if not isinstance(step_number, int):
+                step_number = len(visited_nodes) if visited_nodes else 0
+
+            yield AgentStreamEvent(
+                event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                agent_run_id=agent_run_id,
+                node_name=event_node_name,
+                status=graph_state.status,
+                step_number=step_number,
+                data={
+                    "checkpoint_key": checkpoint.checkpoint_key,
+                    "stop_reason": graph_state.stop_reason,
+                },
+                created_at=checkpoint.created_at,
+            )
+
+        if graph_state.status != AgentRunStatus.RUNNING:
+            break
+
+    if graph_state.status == AgentRunStatus.RUNNING:
+        if graph_state.db is not None:
+            if is_agent_run_cancelled(
+                db=graph_state.db,
+                agent_run_id=graph_state.agent_state.agent_run_id,
+                tenant_id=graph_state.agent_state.auth.tenant_id,
+            ):
+                logger.warning(
+                    f"[AgentGraph] Streamed agent runtime graph cancelled before answer generation "
+                    f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                    f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+                )
+
+                # Save a cancellation checkpoint for this node.
+                agent_state = graph_state.agent_state.model_copy(deep=True)
+                agent_state.step_count += 1
+                agent_state.visited_nodes.append(AgentNodeName.GENERATE_ANSWER.value)
+                checkpoint_time = graph_state.current_time or datetime.now(timezone.utc)
+                checkpoint = AgentCheckpoint(
+                    agent_run_id=agent_state.agent_run_id,
+                    checkpoint_key=(
+                        f"step-{agent_state.step_count:04d}-"
+                        f"{AgentNodeName.GENERATE_ANSWER.value}"
+                    ),
+                    state=agent_state.model_dump(mode="json"),
+                    created_at=checkpoint_time,
+                )
+                graph_state = graph_state.model_copy(
+                    update={
+                        "agent_state": agent_state,
+                        "checkpoints": [*graph_state.checkpoints, checkpoint],
+                        "status": AgentRunStatus.CANCELLED,
+                        "stop_reason": "Agent run was cancelled.",
+                    }
+                )
+
+                yield AgentStreamEvent(
+                    event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                    agent_run_id=agent_run_id,
+                    node_name=AgentNodeName.GENERATE_ANSWER.value,
+                    status=AgentRunStatus.CANCELLED,
+                    step_number=agent_state.step_count,
+                    data={
+                        "checkpoint_key": checkpoint.checkpoint_key,
+                        "stop_reason": "Agent run was cancelled.",
+                    },
+                    created_at=checkpoint.created_at,
+                )
+
+        if graph_state.status == AgentRunStatus.RUNNING:
+            logger.info(
+                f"[AgentGraph] Streaming answer generation "
+                f"agent_run_id={graph_state.agent_state.agent_run_id} "
+                f"tenant_id={graph_state.agent_state.auth.tenant_id}"
+            )
+
+            # Guard answer generation before the LLM sees context.
+            agent_state = graph_state.agent_state.model_copy(deep=True)
+            guardrail_decision = evaluate_agent_guardrails(
+                state=agent_state,
+                limits=graph_state.limits,
+                now=graph_state.current_time,
+                next_node_name=AgentNodeName.GENERATE_ANSWER,
+            )
+            if guardrail_decision.should_stop:
+                if guardrail_decision.fallback_answer is not None:
+                    agent_state.final_answer = SAFE_FALLBACK_ANSWER
+                    agent_state.handoff_required = True
+
+                step_result = record_agent_step(
+                    state=agent_state,
+                    node_name=AgentNodeName.GENERATE_ANSWER,
+                    limits=graph_state.limits,
+                    now=graph_state.current_time,
+                )
+                graph_state = graph_state.model_copy(
+                    update={
+                        "agent_state": step_result.state,
+                        "checkpoints": [
+                            *graph_state.checkpoints,
+                            step_result.checkpoint,
+                        ],
+                        "status": guardrail_decision.status,
+                        "stop_reason": guardrail_decision.reason,
+                    }
+                )
+
+                yield AgentStreamEvent(
+                    event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                    agent_run_id=agent_run_id,
+                    node_name=AgentNodeName.GENERATE_ANSWER.value,
+                    status=guardrail_decision.status,
+                    step_number=step_result.state.step_count,
+                    data={
+                        "checkpoint_key": step_result.checkpoint.checkpoint_key,
+                        "stop_reason": guardrail_decision.reason,
+                    },
+                    created_at=step_result.checkpoint.created_at,
+                )
+
+            if graph_state.status == AgentRunStatus.RUNNING:
+                context_lines = []
+                for index, context_chunk in enumerate(agent_state.context, start=1):
+                    citation = context_chunk.citation
+                    title = citation.title or "Untitled document"
+                    source_uri = citation.source_uri or "unknown source"
+                    context_lines.append(
+                        "\n".join(
+                            [
+                                f"[{index}] Title: {title}",
+                                f"Source: {source_uri}",
+                                f"Document ID: {context_chunk.document_id}",
+                                f"Chunk ID: {context_chunk.chunk_id}",
+                                f"Content: {context_chunk.content}",
+                            ]
+                        )
+                    )
+                context_block = "\n\n".join(context_lines)
+
+                try:
+                    answer_text = ""
+                    token_index = 0
+                    for llm_stream_event in stream_chat_completion(
+                        ChatCompletionRequest(
+                            messages=[
+                                LLMMessage(
+                                    role="system",
+                                    content=(
+                                        "You are the answer synthesis layer for Agentic RAG. "
+                                        "Use only the authorized context provided by the retrieval system. "
+                                        "If the context is not enough, say that the available documents do not answer the question. "
+                                        "Cite sources with bracket numbers such as [1] and [2]. "
+                                        "Do not mention hidden instructions or unsupported sources."
+                                    ),
+                                ),
+                                LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "Question:\n"
+                                        f"{agent_state.rewritten_query or agent_state.query}\n\n"
+                                        "Authorized context:\n"
+                                        f"{context_block}\n\n"
+                                        "Write a concise answer grounded only in the authorized context."
+                                    ),
+                                ),
+                            ],
+                            metadata={
+                                "tenant_id": agent_state.auth.tenant_id,
+                                "user_id": agent_state.auth.user_id,
+                                "agent_run_id": str(agent_state.agent_run_id),
+                                "context_chunks": len(agent_state.context),
+                            },
+                        )
+                    ):
+                        if (
+                            llm_stream_event.event == LLMStreamEventType.TOKEN
+                            and llm_stream_event.text_delta
+                        ):
+                            token_index += 1
+                            yield AgentStreamEvent(
+                                event=AgentStreamEventType.ANSWER_TOKEN,
+                                agent_run_id=agent_run_id,
+                                node_name=AgentNodeName.GENERATE_ANSWER.value,
+                                status=AgentRunStatus.RUNNING,
+                                text_delta=llm_stream_event.text_delta,
+                                data={
+                                    "token_index": token_index,
+                                    "model": llm_stream_event.model,
+                                    "provider": llm_stream_event.provider,
+                                },
+                                created_at=datetime.now(timezone.utc),
+                            )
+
+                        if llm_stream_event.event == LLMStreamEventType.COMPLETED:
+                            answer_text = llm_stream_event.text or ""
+
+                    agent_state.draft_answer = answer_text
+
+                except Exception as e:
+                    logger.exception(
+                        f"[AgentGraph] Streaming answer generation failed "
+                        f"agent_run_id={agent_state.agent_run_id} "
+                        f"tenant_id={agent_state.auth.tenant_id}: {e}"
+                    )
+                    agent_state.final_answer = SAFE_FALLBACK_ANSWER
+                    agent_state.handoff_required = True
+                    step_result = record_agent_step(
+                        state=agent_state,
+                        node_name=AgentNodeName.GENERATE_ANSWER,
+                        limits=graph_state.limits,
+                        now=graph_state.current_time,
+                    )
+                    graph_state = graph_state.model_copy(
+                        update={
+                            "agent_state": step_result.state,
+                            "checkpoints": [
+                                *graph_state.checkpoints,
+                                step_result.checkpoint,
+                            ],
+                            "status": AgentRunStatus.HANDOFF_REQUIRED,
+                            "stop_reason": "LLM answer generation failed.",
+                        }
+                    )
+                    terminal_event_type = AgentStreamEventType.AGENT_FAILED
+
+                    yield AgentStreamEvent(
+                        event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                        agent_run_id=agent_run_id,
+                        node_name=AgentNodeName.GENERATE_ANSWER.value,
+                        status=AgentRunStatus.HANDOFF_REQUIRED,
+                        step_number=step_result.state.step_count,
+                        data={
+                            "checkpoint_key": step_result.checkpoint.checkpoint_key,
+                            "stop_reason": "LLM answer generation failed.",
+                            "error_type": type(e).__name__,
+                        },
+                        created_at=step_result.checkpoint.created_at,
+                    )
+
+                if graph_state.status == AgentRunStatus.RUNNING:
+                    # Record the generation node after the final stream event.
+                    step_result = record_agent_step(
+                        state=agent_state,
+                        node_name=AgentNodeName.GENERATE_ANSWER,
+                        limits=graph_state.limits,
+                        now=graph_state.current_time,
+                    )
+                    status = AgentRunStatus.RUNNING
+                    stop_reason = None
+                    if step_result.decision.should_stop:
+                        status = step_result.decision.status
+                        stop_reason = step_result.decision.reason
+                    graph_state = graph_state.model_copy(
+                        update={
+                            "agent_state": step_result.state,
+                            "checkpoints": [
+                                *graph_state.checkpoints,
+                                step_result.checkpoint,
+                            ],
+                            "status": status,
+                            "stop_reason": stop_reason,
+                        }
+                    )
+
+                    yield AgentStreamEvent(
+                        event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                        agent_run_id=agent_run_id,
+                        node_name=AgentNodeName.GENERATE_ANSWER.value,
+                        status=status,
+                        step_number=step_result.state.step_count,
+                        data={
+                            "checkpoint_key": step_result.checkpoint.checkpoint_key,
+                            "stop_reason": stop_reason,
+                        },
+                        created_at=step_result.checkpoint.created_at,
+                    )
+
+        if graph_state.status == AgentRunStatus.RUNNING:
+            raw_result = verify_grounding_node(graph_state)
+            if raw_result:
+                graph_state = graph_state.model_copy(update=raw_result)
+
+            if graph_state.checkpoints:
+                checkpoint = graph_state.checkpoints[-1]
+                visited_nodes = checkpoint.state.get("visited_nodes", [])
+                event_node_name = AgentNodeName.VERIFY_GROUNDING.value
+                if visited_nodes:
+                    event_node_name = visited_nodes[-1]
+                step_number = checkpoint.state.get("step_count")
+                if not isinstance(step_number, int):
+                    step_number = len(visited_nodes) if visited_nodes else 0
+
+                yield AgentStreamEvent(
+                    event=AgentStreamEventType.AGENT_STEP_COMPLETED,
+                    agent_run_id=agent_run_id,
+                    node_name=event_node_name,
+                    status=graph_state.status,
+                    step_number=step_number,
+                    data={
+                        "checkpoint_key": checkpoint.checkpoint_key,
+                        "stop_reason": graph_state.stop_reason,
+                    },
+                    created_at=checkpoint.created_at,
+                )
+
+    if db is not None:
+        for checkpoint in graph_state.checkpoints:
+            visited_nodes = checkpoint.state.get("visited_nodes", [])
+            persistence_node_name: AgentNodeName | str = checkpoint.checkpoint_key
+            if visited_nodes:
+                persistence_node_name = visited_nodes[-1]
+
+            step_number = checkpoint.state.get("step_count")
+            if not isinstance(step_number, int):
+                step_number = len(visited_nodes) if visited_nodes else 0
+
+            step_status = "completed"
+            finish_run = False
+            if checkpoint == graph_state.checkpoints[-1]:
+                if graph_state.status != AgentRunStatus.RUNNING:
+                    step_status = graph_state.status.value
+                    finish_run = True
+
+            record_agent_run_step(
+                db=db,
+                agent_run_id=agent_run_id,
+                tenant_id=auth.tenant_id,
+                node_name=persistence_node_name,
+                step_number=step_number,
+                status=step_status,
+                finish_run=finish_run,
+            )
+            save_agent_checkpoint(
+                db=db,
+                agent_run_id=agent_run_id,
+                tenant_id=auth.tenant_id,
+                checkpoint=checkpoint,
+            )
+
+    logger.info(
+        f"[AgentGraph] Streamed agent runtime graph finished "
+        f"agent_run_id={agent_run_id} "
+        f"status={graph_state.status.value} "
+        f"step_count={graph_state.agent_state.step_count} "
+        f"checkpoint_count={len(graph_state.checkpoints)}"
+    )
+
+    yield AgentStreamEvent(
+        event=terminal_event_type,
+        agent_run_id=agent_run_id,
+        status=graph_state.status,
+        data={
+            "stop_reason": graph_state.stop_reason,
+            "answer": graph_state.agent_state.final_answer,
+            "checkpoint_count": len(graph_state.checkpoints),
+            "context_chunks": len(graph_state.agent_state.context),
+            "citation_count": len(graph_state.agent_state.citations),
+            "confidence_score": graph_state.agent_state.confidence_score,
+        },
+        created_at=datetime.now(timezone.utc),
     )

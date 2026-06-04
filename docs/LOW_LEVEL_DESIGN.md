@@ -825,8 +825,8 @@ data: {"event":"query_failed","agent_run_id":"...","data":{"error_type":"...","e
 
 The current streaming endpoint reuses the existing BM25 query flow and streams
 query lifecycle events around the final `QueryResponse`. Token-by-token LLM
-streaming is intentionally deferred until the LLM and agent runtime streaming
-contracts are stable.
+streaming is intentionally deferred until the agent runtime stream is wired into
+the query API contract.
 
 Query run endpoints:
 
@@ -996,8 +996,13 @@ failure, or cancellation.
 The graph also checks the persisted agent run status before each node starts
 when a database session is available. If another flow has cancelled the run, the
 graph records a final cancellation checkpoint for that node, stops with
-`cancelled`, and persists the cancelled step status. This graph does not add
-internal API endpoints or streaming events yet.
+`cancelled`, and persists the cancelled step status.
+
+The streamed graph runner emits runtime events without exposing an API endpoint
+yet. It emits `agent_started`, `agent_step_completed`, `answer_token`,
+`agent_completed`, and `agent_failed` events. The streamed answer generation path
+uses the LLM gateway token stream after the same context guardrail passes, then
+runs the same grounding verification before completion.
 
 ### LLM Gateway
 
@@ -1031,9 +1036,9 @@ src/agentic_rag/llm/circuit_breaker.py
 The local gateway supports chat completion, token streaming, and embedding
 generation through LiteLLM. Streaming emits token delta events and a final
 completed event with model, provider, usage, latency, cost, and metadata. The
-streaming contract is kept inside the LLM gateway for now and is not wired into
-the query API or agent graph streaming path yet. Embedding calls enforce input
-budget, retry transient provider failures, reuse circuit-breaker protection,
+streaming contract is now consumed by the agent runtime stream and is not wired
+into the query API yet. Embedding calls enforce input budget, retry transient
+provider failures, reuse circuit-breaker protection,
 and validate the returned vector dimension against the configured pgvector
 dimension before workers persist vectors. Current local testing uses the Gemini
 API model `gemini-embedding-001`, addressed through LiteLLM as

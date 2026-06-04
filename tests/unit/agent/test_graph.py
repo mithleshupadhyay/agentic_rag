@@ -7,7 +7,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from agentic_rag.agent import graph as agent_graph
-from agentic_rag.agent.graph import build_agent_runtime_graph, run_agent_runtime_graph
+from agentic_rag.agent.graph import (
+    build_agent_runtime_graph,
+    run_agent_runtime_graph,
+    stream_agent_runtime_graph,
+)
 from agentic_rag.agent.runtime import SAFE_FALLBACK_ANSWER, start_agent_state
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.agent_runs import cancel_agent_run, get_agent_run
@@ -17,9 +21,14 @@ from agentic_rag.shared.schemas.agent import (
     AgentLimits,
     AgentNodeName,
     AgentRunStatus,
+    AgentStreamEventType,
 )
 from agentic_rag.shared.schemas.auth import AuthContext
-from agentic_rag.shared.schemas.llm import LLMResponse
+from agentic_rag.shared.schemas.llm import (
+    LLMResponse,
+    LLMStreamEvent,
+    LLMStreamEventType,
+)
 from agentic_rag.shared.schemas.retrieval import RetrievalFilters, RetrievalStrategy
 
 
@@ -291,6 +300,199 @@ def test_run_agent_runtime_graph_rejects_ungrounded_generated_answer(
         AgentNodeName.VERIFY_GROUNDING.value,
     ]
     assert result.checkpoints[-1].checkpoint_key == "step-0008-verify_grounding"
+
+
+def test_stream_agent_runtime_graph_yields_tokens_and_completed_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    agent_run_id = uuid4()
+    captured_llm_requests = []
+
+    def fake_stream_chat_completion(request):
+        captured_llm_requests.append(request)
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.TOKEN,
+            text_delta="The incident response ",
+            model="test-model",
+            provider="test-provider",
+            metadata=request.metadata,
+        )
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.TOKEN,
+            text_delta="policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            metadata=request.metadata,
+        )
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.COMPLETED,
+            text="The incident response policy content was found [1].",
+            model="test-model",
+            provider="test-provider",
+            input_tokens=42,
+            output_tokens=9,
+            cost_estimate=0.002,
+            latency_ms=15,
+            metadata=request.metadata,
+        )
+
+    monkeypatch.setattr(
+        agent_graph,
+        "stream_chat_completion",
+        fake_stream_chat_completion,
+    )
+
+    events = list(
+        stream_agent_runtime_graph(
+            agent_run_id=agent_run_id,
+            auth=AuthContext(
+                user_id="user-1",
+                tenant_id="tenant-a",
+                workspace_id="workspace-a",
+                roles=["analyst"],
+                group_ids=["security"],
+                acl_version=4,
+            ),
+            query="Find the incident response policy",
+            retrieval_filters=RetrievalFilters(workspace_id="workspace-a"),
+            now=now,
+            search_client=FakeSearchClient(),
+        )
+    )
+
+    event_types = [event.event for event in events]
+    step_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
+    ]
+    token_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.ANSWER_TOKEN
+    ]
+
+    assert event_types[0] == AgentStreamEventType.AGENT_STARTED
+    assert event_types[-1] == AgentStreamEventType.AGENT_COMPLETED
+    assert [event.text_delta for event in token_events] == [
+        "The incident response ",
+        "policy content was found [1].",
+    ]
+    assert [event.node_name for event in step_events] == [
+        AgentNodeName.CLASSIFY_INTENT.value,
+        AgentNodeName.REWRITE_QUERY.value,
+        AgentNodeName.PLAN_FILTERS.value,
+        AgentNodeName.SELECT_RETRIEVAL_STRATEGY.value,
+        AgentNodeName.BM25_SEARCH.value,
+        AgentNodeName.BUILD_CONTEXT.value,
+        AgentNodeName.GENERATE_ANSWER.value,
+        AgentNodeName.VERIFY_GROUNDING.value,
+    ]
+    assert step_events[-1].status == AgentRunStatus.COMPLETED
+    assert events[-1].status == AgentRunStatus.COMPLETED
+    assert events[-1].data["answer"] == (
+        "The incident response policy content was found [1]."
+    )
+    assert events[-1].data["checkpoint_count"] == 8
+    assert len(captured_llm_requests) == 1
+    assert captured_llm_requests[0].metadata["tenant_id"] == "tenant-a"
+    assert captured_llm_requests[0].metadata["context_chunks"] == 1
+
+
+def test_stream_agent_runtime_graph_blocks_generation_without_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def fail_if_llm_stream_is_called(request):
+        raise AssertionError("LLM stream should not be called without context.")
+
+    monkeypatch.setattr(
+        agent_graph,
+        "stream_chat_completion",
+        fail_if_llm_stream_is_called,
+    )
+
+    events = list(
+        stream_agent_runtime_graph(
+            agent_run_id=uuid4(),
+            auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+            query="Find the incident response policy",
+            now=now,
+            search_client=FakeSearchClient(hits=[]),
+        )
+    )
+    step_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
+    ]
+    token_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.ANSWER_TOKEN
+    ]
+
+    assert token_events == []
+    assert step_events[-1].node_name == AgentNodeName.GENERATE_ANSWER.value
+    assert step_events[-1].status == AgentRunStatus.HANDOFF_REQUIRED
+    assert step_events[-1].data["stop_reason"] == (
+        "Answer generation requires authorized context."
+    )
+    assert events[-1].event == AgentStreamEventType.AGENT_COMPLETED
+    assert events[-1].status == AgentRunStatus.HANDOFF_REQUIRED
+    assert events[-1].data["answer"] == SAFE_FALLBACK_ANSWER
+
+
+def test_stream_agent_runtime_graph_emits_failed_event_when_llm_stream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def fake_stream_chat_completion(request):
+        yield LLMStreamEvent(
+            event=LLMStreamEventType.TOKEN,
+            text_delta="Partial answer ",
+            model="test-model",
+            provider="test-provider",
+            metadata=request.metadata,
+        )
+        raise RuntimeError("stream failed")
+
+    monkeypatch.setattr(
+        agent_graph,
+        "stream_chat_completion",
+        fake_stream_chat_completion,
+    )
+
+    events = list(
+        stream_agent_runtime_graph(
+            agent_run_id=uuid4(),
+            auth=AuthContext(user_id="user-1", tenant_id="tenant-a"),
+            query="Find the incident response policy",
+            now=now,
+            search_client=FakeSearchClient(),
+        )
+    )
+    step_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.AGENT_STEP_COMPLETED
+    ]
+    token_events = [
+        event
+        for event in events
+        if event.event == AgentStreamEventType.ANSWER_TOKEN
+    ]
+
+    assert [event.text_delta for event in token_events] == ["Partial answer "]
+    assert step_events[-1].node_name == AgentNodeName.GENERATE_ANSWER.value
+    assert step_events[-1].status == AgentRunStatus.HANDOFF_REQUIRED
+    assert step_events[-1].data["error_type"] == "RuntimeError"
+    assert events[-1].event == AgentStreamEventType.AGENT_FAILED
+    assert events[-1].status == AgentRunStatus.HANDOFF_REQUIRED
+    assert events[-1].data["answer"] == SAFE_FALLBACK_ANSWER
 
 
 def test_run_agent_runtime_graph_stops_when_guardrail_fires() -> None:
