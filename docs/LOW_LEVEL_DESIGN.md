@@ -880,6 +880,7 @@ Query run endpoints:
 GET /query
 - Lists persisted query runs for the current tenant.
 - Non-admin users only see their own runs.
+- Admin users can list same-tenant runs across users.
 - Workspace-bound users only see their workspace.
 - Supports optional `status` filtering with `queued`, `running`, `completed`,
   `failed`, and `cancelled`.

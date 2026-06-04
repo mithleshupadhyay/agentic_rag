@@ -843,6 +843,223 @@ def test_list_query_run_endpoint_returns_only_current_user_runs() -> None:
         db.close()
 
 
+def test_list_query_run_endpoint_admin_lists_same_tenant_runs_with_filters() -> None:
+    db = create_test_db()
+    try:
+        db.add(
+            Tenant(
+                tenant_id="tenant-b",
+                name="Tenant B",
+                slug="tenant-b",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        admin_context = UserContext(
+            id="admin-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            roles=["admin"],
+            scopes=["query:run"],
+        )
+        owner_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        other_context = UserContext(
+            id="user-2",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-b",
+            scopes=["query:run"],
+        )
+        tenant_b_context = UserContext(
+            id="tenant-b-user",
+            customer_id="tenant-b",
+            tenant_id="tenant-b",
+            workspace_id="workspace-b",
+            scopes=["query:run"],
+        )
+        passed_run_id = uuid4()
+        failed_verification_run_id = uuid4()
+        failed_status_run_id = uuid4()
+        tenant_b_run_id = uuid4()
+        document_id = uuid4()
+        chunk_id = uuid4()
+
+        passed_run = create_query_run(
+            user_context=owner_context,
+            db=db,
+            request=QueryRequest(query="passed query", workspace_id="workspace-a"),
+            agent_run_id=passed_run_id,
+            request_id="request-id-passed",
+        )
+        failed_verification_run = create_query_run(
+            user_context=other_context,
+            db=db,
+            request=QueryRequest(
+                query="failed verification query",
+                workspace_id="workspace-b",
+            ),
+            agent_run_id=failed_verification_run_id,
+            request_id="request-id-failed-verification",
+        )
+        failed_status_run = create_query_run(
+            user_context=other_context,
+            db=db,
+            request=QueryRequest(query="failed query", workspace_id="workspace-b"),
+            agent_run_id=failed_status_run_id,
+            request_id="request-id-failed",
+        )
+        tenant_b_run = create_query_run(
+            user_context=tenant_b_context,
+            db=db,
+            request=QueryRequest(query="tenant b query", workspace_id="workspace-b"),
+            agent_run_id=tenant_b_run_id,
+            request_id="request-id-tenant-b",
+        )
+
+        mark_query_run_completed(
+            db=db,
+            query_run=passed_run,
+            response=QueryResponse(
+                agent_run_id=passed_run_id,
+                answer="Security policy content [1].",
+                citations=[
+                    Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=1.2,
+                    )
+                ],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=25,
+                verification_status=AnswerVerificationStatus.PASSED,
+                verification_reason="Answer citations match retrieved context.",
+            ),
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=failed_verification_run,
+            response=QueryResponse(
+                agent_run_id=failed_verification_run_id,
+                answer="Security policy content without citation.",
+                citations=[],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=31,
+                verification_status=AnswerVerificationStatus.FAILED,
+                verification_reason="Answer did not cite retrieved context.",
+            ),
+        )
+        mark_query_run_failed(
+            db=db,
+            query_run=failed_status_run,
+            error_type="RuntimeError",
+            error_message="retrieval failed",
+            latency_ms=13,
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=tenant_b_run,
+            response=QueryResponse(
+                agent_run_id=tenant_b_run_id,
+                answer="Tenant B answer.",
+                citations=[],
+                context_token_count=0,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=18,
+            ),
+        )
+
+        passed_run.created_at = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)
+        failed_verification_run.created_at = datetime(
+            2026,
+            1,
+            20,
+            9,
+            0,
+            tzinfo=timezone.utc,
+        )
+        failed_status_run.created_at = datetime(2026, 1, 30, 9, 0, tzinfo=timezone.utc)
+        tenant_b_run.created_at = datetime(2026, 1, 30, 9, 0, tzinfo=timezone.utc)
+        db.commit()
+
+        for client in client_with_user(admin_context, db):
+            all_response = client.get("/query?page=1&size=20")
+            user_response = client.get("/query?page=1&size=20&user_id=user-2")
+            workspace_response = client.get(
+                "/query?page=1&size=20&workspace_id=workspace-b"
+            )
+            status_response = client.get("/query?page=1&size=20&status=failed")
+            verification_response = client.get(
+                "/query?page=1&size=20&verification_status=failed"
+            )
+            date_response = client.get(
+                "/query?page=1&size=20"
+                "&created_from=2026-01-15T00:00:00Z"
+                "&created_to=2026-01-25T23:59:00Z"
+            )
+
+        all_body = all_response.json()
+        user_body = user_response.json()
+        workspace_body = workspace_response.json()
+        status_body = status_response.json()
+        verification_body = verification_response.json()
+        date_body = date_response.json()
+
+        assert all_response.status_code == 200
+        assert all_body["page"]["total"] == 3
+        assert [item["agent_run_id"] for item in all_body["items"]] == [
+            str(failed_status_run_id),
+            str(failed_verification_run_id),
+            str(passed_run_id),
+        ]
+        assert {item["user_id"] for item in all_body["items"]} == {
+            "user-1",
+            "user-2",
+        }
+        assert user_response.status_code == 200
+        assert user_body["page"]["total"] == 2
+        assert [item["agent_run_id"] for item in user_body["items"]] == [
+            str(failed_status_run_id),
+            str(failed_verification_run_id),
+        ]
+        assert workspace_response.status_code == 200
+        assert workspace_body["page"]["total"] == 2
+        assert [item["workspace_id"] for item in workspace_body["items"]] == [
+            "workspace-b",
+            "workspace-b",
+        ]
+        assert status_response.status_code == 200
+        assert status_body["page"]["total"] == 1
+        assert status_body["items"][0]["agent_run_id"] == str(failed_status_run_id)
+        assert status_body["items"][0]["status"] == "failed"
+        assert verification_response.status_code == 200
+        assert verification_body["page"]["total"] == 1
+        assert verification_body["items"][0]["agent_run_id"] == str(
+            failed_verification_run_id
+        )
+        assert verification_body["items"][0]["verification_status"] == "failed"
+        assert date_response.status_code == 200
+        assert date_body["page"]["total"] == 1
+        assert date_body["items"][0]["agent_run_id"] == str(
+            failed_verification_run_id
+        )
+    finally:
+        db.close()
+
+
 def test_list_query_run_endpoint_filters_by_status() -> None:
     db = create_test_db()
     try:

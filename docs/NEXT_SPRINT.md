@@ -88,7 +88,7 @@ retrieval quality, and production operations.
 | `tests/unit/api/test_documents.py` | Document API tests, including upload behavior. | Add more authorization edge cases, idempotent upload tests, ingestion status tests, and large file validation tests. | High |
 | `tests/unit/api/test_health.py` | Health API tests. | Add readiness dependency status tests and degraded/unhealthy response tests. | Medium |
 | `tests/unit/api/test_retrieval.py` | Retrieval API tests for BM25, vector, hybrid search, and rerank endpoints. | Add error mapping, empty-result behavior, mocked OpenSearch failures, and integration smoke tests for `/retrieval/bm25-search`, `/retrieval/vector-search`, `/retrieval/hybrid-search`, and `/retrieval/rerank`. | High |
-| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, query-run cancellation authorization, agent runtime streaming response tests, token event tests, and query lifecycle metric assertions. | Add LLM synthesis path tests, richer failure fallback tests, and admin query-run listing tests. | High |
+| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, admin query-run listing coverage, query-run cancellation authorization, agent runtime streaming response tests, token event tests, and query lifecycle metric assertions. | Add LLM synthesis path tests and richer failure fallback tests. | High |
 | `tests/unit/core/test_auth.py` | Auth tests. | Add OIDC JWKS cache tests, invalid issuer/audience tests, tenant claim mapping tests, and scope mapping tests. | High |
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added admin query-run listing coverage for same-tenant user, workspace, status, verification-status, and date filters. |
 | 2026-06-04 | Added tenant-scoped query-run retention cleanup for old terminal runs. |
 | 2026-06-04 | Added created-at date filtering to tenant-scoped query-run list APIs and CRUD. |
 | 2026-06-04 | Added verification-status filtering to tenant-scoped query-run list APIs and CRUD. |
@@ -153,4 +154,4 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query-run admin listing coverage. |
+| 1 | Add query response OpenAPI examples. |
