@@ -35,7 +35,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, and optional Kafka `ingestion.parse` scheduling. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
-| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing with status, verification-status, and created-at date filtering, query-run cancellation, verification metadata exposure, agent-runtime-backed SSE streaming with step and token events, and low-cardinality query metric recording. | Add dashboard panels, alert rules, and OpenAPI examples for query-run responses. | High |
+| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing with status, verification-status, and created-at date filtering, query-run cancellation, verification metadata exposure, agent-runtime-backed SSE streaming with step and token events, and low-cardinality query metric recording. | Add dashboard panels and alert rules as query behavior expands; defer OpenAPI examples until final API polish. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Moved query response OpenAPI examples to final polish and set query synthesis API coverage as the next implementation slice. |
 | 2026-06-04 | Added admin query-run listing coverage for same-tenant user, workspace, status, verification-status, and date filters. |
 | 2026-06-04 | Added tenant-scoped query-run retention cleanup for old terminal runs. |
 | 2026-06-04 | Added created-at date filtering to tenant-scoped query-run list APIs and CRUD. |
@@ -154,4 +155,10 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query response OpenAPI examples. |
+| 1 | Add query synthesis API coverage. |
+
+## Lowest Priority Final Polish
+
+| Work | Timing |
+|---|---|
+| Add minimal OpenAPI examples for stable query request and response contracts. | Do this near the end, after core query behavior, monitoring, deployment, and API contracts are stable. |
