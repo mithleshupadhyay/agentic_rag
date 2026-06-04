@@ -18,7 +18,12 @@ from agentic_rag.shared.db.crud.query_runs import (
 )
 from agentic_rag.shared.db.models import QueryRun, Tenant
 from agentic_rag.shared.schemas.common import Citation
-from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse, QueryRunStatus
+from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
+    QueryRequest,
+    QueryResponse,
+    QueryRunStatus,
+)
 from agentic_rag.shared.schemas.retrieval import RetrievalStrategy
 
 
@@ -94,6 +99,8 @@ def test_create_and_complete_query_run(db: Session) -> None:
             llm_input_tokens=100,
             llm_output_tokens=12,
             llm_cost_estimate=0.001,
+            verification_status=AnswerVerificationStatus.PASSED,
+            verification_reason="Answer citations match retrieved context.",
         ),
     )
 
@@ -114,6 +121,9 @@ def test_create_and_complete_query_run(db: Session) -> None:
     assert completed.llm_output_tokens == 12
     assert completed.llm_cost_estimate == 0.001
     assert completed.llm_model == "gemini/gemini-2.0-flash"
+    assert completed.verification_status == "passed"
+    assert completed.verification_reason == "Answer citations match retrieved context."
+    assert completed.response_payload["verification_status"] == "passed"
     assert completed.completed_at is not None
 
 

@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.models import QueryRun
-from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse, QueryRunStatus
+from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
+    QueryRequest,
+    QueryResponse,
+    QueryRunStatus,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +53,7 @@ def create_query_run(
             max_context_tokens=request.max_context_tokens,
             context_token_count=0,
             synthesis_enabled=False,
+            verification_status=AnswerVerificationStatus.NOT_REQUIRED.value,
             llm_input_tokens=0,
             llm_output_tokens=0,
             llm_cost_estimate=0.0,
@@ -90,6 +96,8 @@ def mark_query_run_completed(
     query_run.confidence_score = response.confidence_score
     query_run.latency_ms = max(response.latency_ms, 0)
     query_run.synthesis_enabled = response.synthesis_enabled
+    query_run.verification_status = response.verification_status.value
+    query_run.verification_reason = response.verification_reason
     query_run.llm_provider = response.llm_provider
     query_run.llm_model = response.llm_model
     query_run.llm_input_tokens = max(response.llm_input_tokens, 0)

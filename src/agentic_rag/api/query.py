@@ -24,6 +24,7 @@ from agentic_rag.shared.db.crud.query_runs import (
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.common import PageResponse
 from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
     QueryRequest,
     QueryResponse,
     QueryRunListItem,
@@ -516,6 +517,10 @@ def list_query_run_endpoint(
                 synthesis_enabled=query_run.synthesis_enabled,
                 llm_provider=query_run.llm_provider,
                 llm_model=query_run.llm_model,
+                verification_status=AnswerVerificationStatus(
+                    query_run.verification_status
+                ),
+                verification_reason=query_run.verification_reason,
                 latency_ms=query_run.latency_ms,
                 created_at=query_run.created_at,
                 completed_at=query_run.completed_at,
@@ -600,6 +605,8 @@ def get_query_run_endpoint(
         llm_input_tokens=query_run.llm_input_tokens,
         llm_output_tokens=query_run.llm_output_tokens,
         llm_cost_estimate=query_run.llm_cost_estimate,
+        verification_status=AnswerVerificationStatus(query_run.verification_status),
+        verification_reason=query_run.verification_reason,
         error_type=query_run.error_type,
         error_message=query_run.error_message,
         response_payload=query_run.response_payload,
@@ -701,6 +708,8 @@ def cancel_query_run_endpoint(
         llm_input_tokens=query_run.llm_input_tokens,
         llm_output_tokens=query_run.llm_output_tokens,
         llm_cost_estimate=query_run.llm_cost_estimate,
+        verification_status=AnswerVerificationStatus(query_run.verification_status),
+        verification_reason=query_run.verification_reason,
         error_type=query_run.error_type,
         error_message=query_run.error_message,
         response_payload=query_run.response_payload,

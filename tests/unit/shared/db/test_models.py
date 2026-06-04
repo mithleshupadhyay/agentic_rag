@@ -295,6 +295,8 @@ def test_tenant_document_chunk_acl_flow_can_persist() -> None:
         stored_query_run = session.scalars(select(QueryRun)).one()
         assert stored_query_run.tenant_id == "tenant-a"
         assert stored_query_run.request_id == "request-id-1"
+        assert stored_query_run.verification_status == "not_required"
+        assert stored_query_run.verification_reason is None
         stored_agent_run = session.scalars(select(AgentRun)).one()
         assert stored_agent_run.tenant_id == "tenant-a"
         assert stored_agent_run.steps[0].node_name == "classify_intent"

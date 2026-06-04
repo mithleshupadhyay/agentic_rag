@@ -448,6 +448,8 @@ query_runs
 - confidence_score
 - latency_ms
 - synthesis_enabled
+- verification_status
+- verification_reason
 - llm_provider
 - llm_model
 - llm_input_tokens
@@ -788,6 +790,12 @@ answers with missing citations or citations that do not map to the returned
 context. When verification fails, the API keeps the retrieved context and
 citations in the response but returns a safe fallback answer.
 
+Query runs persist answer verification metadata. `verification_status` is
+`not_required` for retrieval-only answers, `passed` for verified synthesized
+answers, `failed` for generated answers rejected by the verifier, and `skipped`
+when synthesis fails before verification can run. `verification_reason` stores a
+short operational reason without raw prompts or private document text.
+
 Current answer confidence is deterministic. The BM25 query path scores returned
 answers from retrieval strength, context coverage, citation coverage, token
 coverage, and verified LLM synthesis. Empty retrieval returns `0.0`. Retrieved
@@ -829,6 +837,8 @@ class QueryResponse(BaseModel):
     llm_output_tokens: int = 0
     llm_cost_estimate: float = 0.0
     synthesis_error: str | None = None
+    verification_status: str = "not_required"
+    verification_reason: str | None = None
 ```
 
 Streaming response:

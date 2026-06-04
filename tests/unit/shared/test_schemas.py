@@ -30,6 +30,7 @@ from agentic_rag.shared.schemas.documents import (
     DocumentSourceType,
 )
 from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
     QueryRequest,
     QueryResponse,
     QueryRunListItem,
@@ -143,6 +144,8 @@ def test_query_response_contract() -> None:
     assert response.llm_output_tokens == 0
     assert response.llm_cost_estimate == 0.0
     assert response.synthesis_error is None
+    assert response.verification_status == AnswerVerificationStatus.NOT_REQUIRED
+    assert response.verification_reason is None
 
 
 def test_query_run_response_models_include_request_id() -> None:
@@ -168,7 +171,9 @@ def test_query_run_response_models_include_request_id() -> None:
     )
 
     assert read_model.request_id == "request-id-1"
+    assert read_model.verification_status == AnswerVerificationStatus.NOT_REQUIRED
     assert list_item.request_id == "request-id-1"
+    assert list_item.verification_status == AnswerVerificationStatus.NOT_REQUIRED
 
 
 def test_query_request_defaults() -> None:

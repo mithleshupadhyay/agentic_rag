@@ -89,6 +89,13 @@ class QueryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=False,
         server_default=false(),
     )
+    verification_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="not_required",
+        server_default="not_required",
+    )
+    verification_reason: Mapped[str | None] = mapped_column(Text)
     llm_provider: Mapped[str | None] = mapped_column(String(128))
     llm_model: Mapped[str | None] = mapped_column(String(256))
     llm_input_tokens: Mapped[int] = mapped_column(

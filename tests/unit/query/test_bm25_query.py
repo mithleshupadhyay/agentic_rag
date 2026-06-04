@@ -13,7 +13,7 @@ from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.models import QueryRun, Tenant
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.llm import LLMResponse
-from agentic_rag.shared.schemas.query import QueryRequest
+from agentic_rag.shared.schemas.query import AnswerVerificationStatus, QueryRequest
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
     RetrievalResponse,
@@ -244,6 +244,8 @@ def test_run_bm25_query_synthesizes_answer_when_enabled(monkeypatch) -> None:
     assert response.llm_output_tokens == 14
     assert response.llm_cost_estimate == 0.001
     assert response.synthesis_error is None
+    assert response.verification_status == AnswerVerificationStatus.PASSED
+    assert response.verification_reason == "Answer citations match retrieved context."
     assert "Use only the authorized context" in captured["request"].messages[0].content
     assert "Security policy content." in captured["request"].messages[1].content
 
@@ -317,6 +319,8 @@ def test_run_bm25_query_rejects_synthesized_answer_without_citation(
     assert response.llm_output_tokens == 14
     assert response.llm_cost_estimate == 0.001
     assert response.confidence_score == 0.35
+    assert response.verification_status == AnswerVerificationStatus.FAILED
+    assert response.verification_reason == "Answer did not cite retrieved context."
     assert "could not be verified" in response.answer
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
@@ -388,6 +392,10 @@ def test_run_bm25_query_rejects_synthesized_answer_with_unknown_citation(
     assert response.synthesis_enabled is False
     assert response.synthesis_error == "LLM answer verification failed"
     assert response.confidence_score == 0.35
+    assert response.verification_status == AnswerVerificationStatus.FAILED
+    assert response.verification_reason == (
+        "Answer cited source numbers that were not present in retrieved context."
+    )
     assert "could not be verified" in response.answer
     assert response.citations[0].title == "Security Policy"
 
@@ -452,6 +460,8 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.llm_output_tokens == 0
     assert response.llm_cost_estimate == 0.0
     assert response.confidence_score == 0.35
+    assert response.verification_status == AnswerVerificationStatus.SKIPPED
+    assert response.verification_reason == "LLM synthesis failed before verification."
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert "answer synthesis failed" in response.answer
@@ -533,7 +543,10 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.llm_input_tokens == 0
         assert query_run.llm_output_tokens == 0
         assert query_run.llm_cost_estimate == 0.0
+        assert query_run.verification_status == "not_required"
+        assert query_run.verification_reason == "LLM synthesis was not requested."
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
+        assert query_run.response_payload["verification_status"] == "not_required"
         assert query_run.citations["items"][0]["title"] == "Security Policy"
 
 
@@ -619,9 +632,11 @@ def test_run_bm25_query_returns_cached_response(monkeypatch) -> None:
         assert response.agent_run_id == agent_run_id
         assert response.answer == "Cached answer from authorized context."
         assert response.confidence_score == 0.44
+        assert response.verification_status == AnswerVerificationStatus.NOT_REQUIRED
         assert response.latency_ms >= 0
         assert query_run.status == "completed"
         assert query_run.response_payload["agent_run_id"] == str(agent_run_id)
+        assert query_run.response_payload["verification_status"] == "not_required"
         assert query_run.answer == "Cached answer from authorized context."
         assert fake_redis.get_calls[0].startswith("agentic-rag:test:query:bm25:")
         assert "security policy" not in fake_redis.get_calls[0]
@@ -695,6 +710,7 @@ def test_run_bm25_query_writes_response_to_cache_on_miss(monkeypatch) -> None:
     assert cached_data["answer"] == response.answer
     assert cached_data["confidence_score"] == response.confidence_score
     assert cached_data["retrieval_strategy"] == "bm25"
+    assert cached_data["verification_status"] == "not_required"
     assert "security policy" not in cached_key
 
 

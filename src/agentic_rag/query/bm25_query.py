@@ -21,7 +21,11 @@ from agentic_rag.shared.db.crud.query_runs import (
     mark_query_run_failed,
 )
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
-from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse
+from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
+    QueryRequest,
+    QueryResponse,
+)
 from agentic_rag.shared.schemas.retrieval import ContextBuildRequest, RetrievalStrategy
 
 
@@ -183,6 +187,8 @@ def run_bm25_query(
         llm_output_tokens = 0
         llm_cost_estimate = 0.0
         confidence_score = 0.0
+        verification_status = AnswerVerificationStatus.NOT_REQUIRED
+        verification_reason = "LLM synthesis was not requested."
 
         if context_response.context:
             answer = (
@@ -284,6 +290,8 @@ def run_bm25_query(
                 if verification_result.passed:
                     answer = llm_response.text
                     synthesis_enabled = True
+                    verification_status = AnswerVerificationStatus.PASSED
+                    verification_reason = verification_result.reason
                     confidence_score = round(
                         min(0.95, confidence_score + 0.25),
                         2,
@@ -300,6 +308,8 @@ def run_bm25_query(
                         "Use the returned context and citations for review."
                     )
                     synthesis_error = "LLM answer verification failed"
+                    verification_status = AnswerVerificationStatus.FAILED
+                    verification_reason = verification_result.reason
                     confidence_score = min(confidence_score, 0.35)
 
             except Exception as e:
@@ -312,6 +322,8 @@ def run_bm25_query(
                     "Use the returned context and citations for review."
                 )
                 synthesis_error = "LLM synthesis failed"
+                verification_status = AnswerVerificationStatus.SKIPPED
+                verification_reason = "LLM synthesis failed before verification."
                 confidence_score = min(confidence_score, 0.35)
 
         latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
@@ -322,6 +334,7 @@ def run_bm25_query(
             f"candidates={len(retrieval_response.candidates)} "
             f"context_chunks={len(context_response.context)} synthesis_enabled={synthesis_enabled} "
             f"confidence_score={confidence_score} "
+            f"verification_status={verification_status.value} "
             f"latency_ms={latency_ms}"
         )
         response = QueryResponse(
@@ -341,6 +354,8 @@ def run_bm25_query(
             llm_output_tokens=llm_output_tokens,
             llm_cost_estimate=llm_cost_estimate,
             synthesis_error=synthesis_error,
+            verification_status=verification_status,
+            verification_reason=verification_reason,
         )
         if db is not None and query_run is not None:
             mark_query_run_completed(

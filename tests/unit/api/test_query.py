@@ -27,7 +27,11 @@ from agentic_rag.shared.schemas.agent import (
     AgentStreamEvent,
     AgentStreamEventType,
 )
-from agentic_rag.shared.schemas.query import QueryRequest, QueryResponse
+from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
+    QueryRequest,
+    QueryResponse,
+)
 from agentic_rag.shared.schemas.retrieval import (
     ContextChunk,
     RetrievalStrategy,
@@ -536,6 +540,8 @@ def test_get_query_run_endpoint_returns_persisted_response() -> None:
                 retrieval_strategy=RetrievalStrategy.BM25,
                 latency_ms=20,
                 synthesis_enabled=False,
+                verification_status=AnswerVerificationStatus.PASSED,
+                verification_reason="Answer citations match retrieved context.",
             ),
         )
 
@@ -551,6 +557,9 @@ def test_get_query_run_endpoint_returns_persisted_response() -> None:
         assert body["request_id"] == "request-id-1"
         assert body["answer"] == "Security policy content [1]."
         assert body["response"]["answer"] == "Security policy content [1]."
+        assert body["verification_status"] == "passed"
+        assert body["verification_reason"] == "Answer citations match retrieved context."
+        assert body["response"]["verification_status"] == "passed"
         assert body["citations"][0]["title"] == "Security Policy"
     finally:
         db.close()
@@ -889,6 +898,8 @@ def test_list_query_run_endpoint_filters_by_status() -> None:
                 confidence_score=0.0,
                 retrieval_strategy=RetrievalStrategy.BM25,
                 latency_ms=25,
+                verification_status=AnswerVerificationStatus.PASSED,
+                verification_reason="Answer citations match retrieved context.",
             ),
         )
         mark_query_run_failed(
@@ -914,6 +925,7 @@ def test_list_query_run_endpoint_filters_by_status() -> None:
         assert completed_body["page"]["total"] == 1
         assert completed_body["items"][0]["agent_run_id"] == str(completed_run_id)
         assert completed_body["items"][0]["status"] == "completed"
+        assert completed_body["items"][0]["verification_status"] == "passed"
     finally:
         db.close()
 

@@ -40,6 +40,13 @@ class QueryRequest(APIModel):
     max_context_tokens: int = Field(default=6000, ge=500)
 
 
+class AnswerVerificationStatus(StrEnum):
+    NOT_REQUIRED = "not_required"
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class QueryResponse(APIModel):
     agent_run_id: UUID
     answer: str
@@ -57,6 +64,8 @@ class QueryResponse(APIModel):
     llm_output_tokens: int = Field(default=0, ge=0)
     llm_cost_estimate: float = Field(default=0.0, ge=0.0)
     synthesis_error: str | None = None
+    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_reason: str | None = None
 
 
 class QueryRunStatus(StrEnum):
@@ -92,6 +101,8 @@ class QueryRunRead(APIModel):
     llm_input_tokens: int = Field(default=0, ge=0)
     llm_output_tokens: int = Field(default=0, ge=0)
     llm_cost_estimate: float = Field(default=0.0, ge=0.0)
+    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_reason: str | None = None
     error_type: str | None = None
     error_message: str | None = None
     response_payload: JsonObject = Field(default_factory=dict)
@@ -113,6 +124,8 @@ class QueryRunListItem(APIModel):
     synthesis_enabled: bool = False
     llm_provider: str | None = None
     llm_model: str | None = None
+    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_reason: str | None = None
     latency_ms: int | None = Field(default=None, ge=0)
     created_at: datetime
     completed_at: datetime | None = None
