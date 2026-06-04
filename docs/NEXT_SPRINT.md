@@ -35,7 +35,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, and optional Kafka `ingestion.parse` scheduling. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
-| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing, query-run cancellation, agent-runtime-backed SSE streaming with step and token events, and low-cardinality query metric recording. | Add richer verification status, richer status filtering, dashboard panels, alert rules, and OpenAPI examples for query-run responses. | High |
+| `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing with status filtering, query-run cancellation, agent-runtime-backed SSE streaming with step and token events, and low-cardinality query metric recording. | Add richer verification status, dashboard panels, alert rules, and OpenAPI examples for query-run responses. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
 | `src/agentic_rag/core/authorization.py` | Tenant, user, group, role, and scope checks. | Extend to chunk-level authorization, workspace policies, document classification checks, deny-by-default rules, and retrieval-time ACL filtering. | High |
 | `src/agentic_rag/core/dependencies.py` | Shared FastAPI dependencies. | Add dependencies for object store, request context, pagination, rate limit context, and service-level settings. | Medium |
@@ -53,7 +53,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, exponential retry backoff, retry eligibility, and lock cleanup on completion/failure. | Add retry jitter, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
 | `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, event chunk filtering, and vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing with tenant, document, and event chunk filters. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
-| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, safe metric defaults, and listing helpers. | Add status filtering, date filtering, retention cleanup, admin search, and cache/budget metadata updates. | High |
+| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, status filtering, safe metric defaults, and listing helpers. | Add date filtering, retention cleanup, admin search, and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/db/crud/agent_runs.py` | Tenant-scoped agent run persistence functions for create run, cancel active run, check cancelled status, record step, save checkpoint, fetch run with steps/checkpoints, and update terminal guardrail status from graph steps. | Add explicit status transition helpers only when API and worker lifecycle ownership needs them. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants and canonical topic groupings/mappings for ingestion, retry, and DLQ flows. | Add tenant-aware topic naming policy, topic retention documentation, and environment-specific topic prefixes when queue-backed workers are wired. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added status filtering to tenant-scoped query-run list APIs and CRUD. |
 | 2026-06-04 | Added authorization-scoped Redis cache lookup and write-through fallback for BM25 query orchestration. |
 | 2026-06-04 | Added deterministic query answer confidence scoring from retrieval, context, citation, and verified synthesis signals. |
 | 2026-06-04 | Added persisted graph replay metadata for retrieval, context building, answer generation, and grounding verification nodes. |
@@ -148,4 +149,4 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add richer verification status and status filtering to query-run APIs. |
+| 1 | Add query-run verification status metadata. |

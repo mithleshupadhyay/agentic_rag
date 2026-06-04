@@ -329,6 +329,111 @@ def test_get_and_list_query_runs_are_tenant_scoped(db: Session) -> None:
     assert filtered_runs[0].id == tenant_a_run.id
 
 
+def test_list_query_runs_filters_by_status(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    add_tenant(db, "tenant-b")
+    document_id = uuid4()
+    chunk_id = uuid4()
+    tenant_a_context = UserContext(
+        id="user-a",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    tenant_b_context = UserContext(
+        id="user-b",
+        customer_id="tenant-b",
+        tenant_id="tenant-b",
+    )
+    completed_run_id = uuid4()
+    failed_run_id = uuid4()
+    running_run_id = uuid4()
+    tenant_b_run_id = uuid4()
+
+    completed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="completed query"),
+        agent_run_id=completed_run_id,
+    )
+    failed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="failed query"),
+        agent_run_id=failed_run_id,
+    )
+    create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="running query"),
+        agent_run_id=running_run_id,
+    )
+    tenant_b_run = create_query_run(
+        user_context=tenant_b_context,
+        db=db,
+        request=QueryRequest(query="tenant b query"),
+        agent_run_id=tenant_b_run_id,
+    )
+
+    mark_query_run_completed(
+        db=db,
+        query_run=completed_run,
+        response=QueryResponse(
+            agent_run_id=completed_run_id,
+            answer="Security policy content [1].",
+            citations=[
+                Citation(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    title="Security Policy",
+                    quote="Security policy content.",
+                    score=1.2,
+                )
+            ],
+            context_token_count=3,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=25,
+        ),
+    )
+    mark_query_run_failed(
+        db=db,
+        query_run=failed_run,
+        error_type="RuntimeError",
+        error_message="retrieval failed",
+        latency_ms=13,
+    )
+    mark_query_run_failed(
+        db=db,
+        query_run=tenant_b_run,
+        error_type="RuntimeError",
+        error_message="tenant b retrieval failed",
+        latency_ms=21,
+    )
+
+    completed_runs, completed_total = list_query_runs(
+        db,
+        "tenant-a",
+        status=QueryRunStatus.COMPLETED,
+    )
+    failed_runs, failed_total = list_query_runs(
+        db,
+        "tenant-a",
+        status=QueryRunStatus.FAILED,
+    )
+    running_runs, running_total = list_query_runs(
+        db,
+        "tenant-a",
+        status=QueryRunStatus.RUNNING,
+    )
+
+    assert completed_total == 1
+    assert [query_run.id for query_run in completed_runs] == [completed_run_id]
+    assert failed_total == 1
+    assert [query_run.id for query_run in failed_runs] == [failed_run_id]
+    assert running_total == 1
+    assert [query_run.id for query_run in running_runs] == [running_run_id]
+
+
 def test_create_query_run_rolls_back_on_integrity_error(db: Session) -> None:
     add_tenant(db, "tenant-a")
     user_context = UserContext(

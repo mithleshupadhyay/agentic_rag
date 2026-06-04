@@ -865,6 +865,8 @@ GET /query
 - Lists persisted query runs for the current tenant.
 - Non-admin users only see their own runs.
 - Workspace-bound users only see their workspace.
+- Supports optional `status` filtering with `queued`, `running`, `completed`,
+  `failed`, and `cancelled`.
 
 GET /query/{agent_run_id}
 - Returns one tenant-scoped query run by run id.

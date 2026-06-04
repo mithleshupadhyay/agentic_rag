@@ -17,6 +17,7 @@ from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.query_runs import (
     create_query_run,
     mark_query_run_completed,
+    mark_query_run_failed,
 )
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.db.session import get_session
@@ -829,5 +830,108 @@ def test_list_query_run_endpoint_returns_only_current_user_runs() -> None:
         assert body["items"][0]["query"] == "my query"
         assert body["items"][0]["user_id"] == "user-1"
         assert body["items"][0]["request_id"] == "request-id-1"
+    finally:
+        db.close()
+
+
+def test_list_query_run_endpoint_filters_by_status() -> None:
+    db = create_test_db()
+    try:
+        document_id = uuid4()
+        chunk_id = uuid4()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        completed_run_id = uuid4()
+        failed_run_id = uuid4()
+        running_run_id = uuid4()
+        completed_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="completed query", workspace_id="workspace-a"),
+            agent_run_id=completed_run_id,
+            request_id="request-id-completed",
+        )
+        failed_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="failed query", workspace_id="workspace-a"),
+            agent_run_id=failed_run_id,
+            request_id="request-id-failed",
+        )
+        create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="running query", workspace_id="workspace-a"),
+            agent_run_id=running_run_id,
+            request_id="request-id-running",
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=completed_run,
+            response=QueryResponse(
+                agent_run_id=completed_run_id,
+                answer="Security policy content [1].",
+                citations=[
+                    Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=1.2,
+                    )
+                ],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=25,
+            ),
+        )
+        mark_query_run_failed(
+            db=db,
+            query_run=failed_run,
+            error_type="RuntimeError",
+            error_message="retrieval failed",
+            latency_ms=13,
+        )
+
+        for client in client_with_user(user_context, db):
+            failed_response = client.get("/query?page=1&size=20&status=failed")
+            completed_response = client.get("/query?page=1&size=20&status=completed")
+
+        failed_body = failed_response.json()
+        completed_body = completed_response.json()
+
+        assert failed_response.status_code == 200
+        assert failed_body["page"]["total"] == 1
+        assert failed_body["items"][0]["agent_run_id"] == str(failed_run_id)
+        assert failed_body["items"][0]["status"] == "failed"
+        assert completed_response.status_code == 200
+        assert completed_body["page"]["total"] == 1
+        assert completed_body["items"][0]["agent_run_id"] == str(completed_run_id)
+        assert completed_body["items"][0]["status"] == "completed"
+    finally:
+        db.close()
+
+
+def test_list_query_run_endpoint_rejects_invalid_status_filter() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.get("/query?page=1&size=20&status=unknown")
+
+        assert response.status_code == 422
     finally:
         db.close()
