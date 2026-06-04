@@ -276,3 +276,47 @@ def list_query_runs(
         f"tenant={tenant_id}"
     )
     return query_runs, total
+
+
+def cleanup_query_runs_by_retention(
+    db: Session,
+    tenant_id: str,
+    created_before: datetime,
+) -> int:
+    logger.info(
+        f"[DB] Cleaning query runs tenant={tenant_id} "
+        f"created_before={created_before.isoformat()}"
+    )
+    terminal_statuses = [
+        QueryRunStatus.COMPLETED.value,
+        QueryRunStatus.FAILED.value,
+        QueryRunStatus.CANCELLED.value,
+    ]
+
+    try:
+        deleted_count = (
+            db.query(QueryRun)
+            .filter(
+                QueryRun.tenant_id == tenant_id,
+                QueryRun.status.in_(terminal_statuses),
+                QueryRun.created_at < created_before,
+            )
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        logger.info(
+            f"[DB] Cleaned {deleted_count} query runs tenant={tenant_id} "
+            f"created_before={created_before.isoformat()}"
+        )
+        return deleted_count
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception(
+            f"[DB] Failed to clean query runs tenant={tenant_id} "
+            f"created_before={created_before.isoformat()}: {e}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Database error during query run retention cleanup.",
+        )

@@ -11,6 +11,7 @@ from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.query_runs import (
     cancel_query_run,
+    cleanup_query_runs_by_retention,
     create_query_run,
     get_query_run,
     list_query_runs,
@@ -690,6 +691,186 @@ def test_list_query_runs_filters_by_created_at(db: Session) -> None:
     assert [query_run.id for query_run in from_runs] == [new_run_id, middle_run_id]
     assert to_total == 2
     assert [query_run.id for query_run in to_runs] == [middle_run_id, old_run_id]
+
+
+def test_cleanup_query_runs_by_retention_deletes_only_old_terminal_tenant_rows(
+    db: Session,
+) -> None:
+    add_tenant(db, "tenant-a")
+    add_tenant(db, "tenant-b")
+    tenant_a_context = UserContext(
+        id="user-a",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    tenant_b_context = UserContext(
+        id="user-b",
+        customer_id="tenant-b",
+        tenant_id="tenant-b",
+    )
+    cutoff = datetime(2026, 1, 15, 0, 0, tzinfo=timezone.utc)
+    old_time = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+    recent_time = datetime(2026, 1, 20, 9, 0, tzinfo=timezone.utc)
+    old_completed_run_id = uuid4()
+    old_failed_run_id = uuid4()
+    old_cancelled_run_id = uuid4()
+    old_running_run_id = uuid4()
+    old_queued_run_id = uuid4()
+    boundary_completed_run_id = uuid4()
+    recent_completed_run_id = uuid4()
+    tenant_b_completed_run_id = uuid4()
+
+    old_completed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old completed query"),
+        agent_run_id=old_completed_run_id,
+    )
+    old_failed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old failed query"),
+        agent_run_id=old_failed_run_id,
+    )
+    create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old cancelled query"),
+        agent_run_id=old_cancelled_run_id,
+    )
+    old_running_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old running query"),
+        agent_run_id=old_running_run_id,
+    )
+    old_queued_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="old queued query"),
+        agent_run_id=old_queued_run_id,
+    )
+    boundary_completed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="boundary completed query"),
+        agent_run_id=boundary_completed_run_id,
+    )
+    recent_completed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="recent completed query"),
+        agent_run_id=recent_completed_run_id,
+    )
+    tenant_b_completed_run = create_query_run(
+        user_context=tenant_b_context,
+        db=db,
+        request=QueryRequest(query="tenant b old completed query"),
+        agent_run_id=tenant_b_completed_run_id,
+    )
+
+    mark_query_run_completed(
+        db=db,
+        query_run=old_completed_run,
+        response=QueryResponse(
+            agent_run_id=old_completed_run_id,
+            answer="Old completed answer.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=10,
+        ),
+    )
+    mark_query_run_failed(
+        db=db,
+        query_run=old_failed_run,
+        error_type="RuntimeError",
+        error_message="old failure",
+        latency_ms=11,
+    )
+    cancel_query_run(
+        db=db,
+        agent_run_id=old_cancelled_run_id,
+        tenant_id="tenant-a",
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=boundary_completed_run,
+        response=QueryResponse(
+            agent_run_id=boundary_completed_run_id,
+            answer="Boundary completed answer.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=12,
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=recent_completed_run,
+        response=QueryResponse(
+            agent_run_id=recent_completed_run_id,
+            answer="Recent completed answer.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=13,
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=tenant_b_completed_run,
+        response=QueryResponse(
+            agent_run_id=tenant_b_completed_run_id,
+            answer="Tenant B completed answer.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=14,
+        ),
+    )
+
+    old_completed_run.created_at = old_time
+    old_failed_run.created_at = old_time
+    cancelled_run = get_query_run(db, old_cancelled_run_id, "tenant-a")
+    assert cancelled_run is not None
+    cancelled_run.created_at = old_time
+    old_running_run.created_at = old_time
+    old_queued_run.status = QueryRunStatus.QUEUED.value
+    old_queued_run.created_at = old_time
+    boundary_completed_run.created_at = cutoff
+    recent_completed_run.created_at = recent_time
+    tenant_b_completed_run.created_at = old_time
+    db.commit()
+
+    deleted_count = cleanup_query_runs_by_retention(
+        db=db,
+        tenant_id="tenant-a",
+        created_before=cutoff,
+    )
+
+    tenant_a_runs, tenant_a_total = list_query_runs(db, "tenant-a")
+
+    assert deleted_count == 3
+    assert get_query_run(db, old_completed_run_id, "tenant-a") is None
+    assert get_query_run(db, old_failed_run_id, "tenant-a") is None
+    assert get_query_run(db, old_cancelled_run_id, "tenant-a") is None
+    assert get_query_run(db, old_running_run_id, "tenant-a") is not None
+    assert get_query_run(db, old_queued_run_id, "tenant-a") is not None
+    assert get_query_run(db, boundary_completed_run_id, "tenant-a") is not None
+    assert get_query_run(db, recent_completed_run_id, "tenant-a") is not None
+    assert get_query_run(db, tenant_b_completed_run_id, "tenant-b") is not None
+    assert tenant_a_total == 4
+    assert {query_run.id for query_run in tenant_a_runs} == {
+        old_running_run_id,
+        old_queued_run_id,
+        boundary_completed_run_id,
+        recent_completed_run_id,
+    }
 
 
 def test_create_query_run_rolls_back_on_integrity_error(db: Session) -> None:

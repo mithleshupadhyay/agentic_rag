@@ -796,6 +796,12 @@ answers, `failed` for generated answers rejected by the verifier, and `skipped`
 when synthesis fails before verification can run. `verification_reason` stores a
 short operational reason without raw prompts or private document text.
 
+Query-run retention cleanup is tenant-scoped and intentionally separate from the
+public query APIs. The cleanup path hard-deletes only terminal runs older than a
+caller-provided creation-time cutoff. Terminal cleanup includes `completed`,
+`failed`, and `cancelled` runs. Active `queued` and `running` runs are retained
+even when their creation time is older than the cutoff.
+
 Current answer confidence is deterministic. The BM25 query path scores returned
 answers from retrieval strength, context coverage, citation coverage, token
 coverage, and verified LLM synthesis. Empty retrieval returns `0.0`. Retrieved

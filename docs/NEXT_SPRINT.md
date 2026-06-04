@@ -53,7 +53,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, exponential retry backoff, retry eligibility, and lock cleanup on completion/failure. | Add retry jitter, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
 | `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, event chunk filtering, and vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing with tenant, document, and event chunk filters. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
-| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, status filtering, verification-status filtering, created-at date filtering, safe metric defaults, and listing helpers. | Add retention cleanup, admin search, and cache/budget metadata updates. | High |
+| `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, status filtering, verification-status filtering, created-at date filtering, retention cleanup for old terminal runs, safe metric defaults, and listing helpers. | Add admin search and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/db/crud/agent_runs.py` | Tenant-scoped agent run persistence functions for create run, cancel active run, check cancelled status, record step, save checkpoint, fetch run with steps/checkpoints, and update terminal guardrail status from graph steps. | Add explicit status transition helpers only when API and worker lifecycle ownership needs them. | High |
 | `src/agentic_rag/shared/kafka/topics.py` | Kafka topic constants and canonical topic groupings/mappings for ingestion, retry, and DLQ flows. | Add tenant-aware topic naming policy, topic retention documentation, and environment-specific topic prefixes when queue-backed workers are wired. | High |
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
@@ -94,7 +94,7 @@ retrieval quality, and production operations.
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
 | `tests/unit/shared/db/test_embedding_crud.py` | Embedding CRUD tests for tenant boundaries, idempotent writes, stale content-hash updates, missing-embedding selection, and dimension validation. | Add vector search tests, batch collision tests, and integration coverage against PostgreSQL/pgvector. | High |
 | `tests/unit/shared/db/test_indexing_crud.py` | BM25 indexing CRUD tests. | Add retry selection, failed-index recovery, tenant batching, and stale index-name/hash transition tests. | Medium |
-| `tests/unit/shared/db/test_query_runs_crud.py` | Query run CRUD tests for create, complete, fail, cancel, fetch, list, tenant scope, status filtering, verification-status filtering, date filtering, metric defaults, and rollback behavior. | Add request ID lookup and retention cleanup tests. | Medium |
+| `tests/unit/shared/db/test_query_runs_crud.py` | Query run CRUD tests for create, complete, fail, cancel, fetch, list, tenant scope, status filtering, verification-status filtering, date filtering, retention cleanup, metric defaults, and rollback behavior. | Add request ID lookup tests. | Medium |
 | `tests/unit/shared/db/test_agent_runs_crud.py` | Agent run persistence tests for create run, cancel run, check cancelled status, record step, save checkpoint, fetch run, tenant boundaries, rollback behavior, and terminal guardrail status updates. | Add lifecycle transition tests when API and worker ownership are introduced. | High |
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added tenant-scoped query-run retention cleanup for old terminal runs. |
 | 2026-06-04 | Added created-at date filtering to tenant-scoped query-run list APIs and CRUD. |
 | 2026-06-04 | Added verification-status filtering to tenant-scoped query-run list APIs and CRUD. |
 | 2026-06-04 | Added query-run verification status metadata to BM25 query responses, persisted query runs, and query-run APIs. |
@@ -152,4 +153,4 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query-run retention cleanup. |
+| 1 | Add query-run admin listing coverage. |
