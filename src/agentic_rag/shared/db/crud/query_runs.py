@@ -235,11 +235,13 @@ def list_query_runs(
     user_id: Optional[str] = None,
     request_id: Optional[str] = None,
     status: QueryRunStatus | None = None,
+    verification_status: AnswerVerificationStatus | None = None,
 ) -> tuple[list[QueryRun], int]:
     logger.info(
         f"[DB] Listing query runs tenant={tenant_id} skip={skip} limit={limit} "
         f"workspace_id={workspace_id} user_id={user_id} request_id={request_id} "
-        f"status={status.value if status else None}"
+        f"status={status.value if status else None} "
+        f"verification_status={verification_status.value if verification_status else None}"
     )
     query = db.query(QueryRun).filter(QueryRun.tenant_id == tenant_id)
 
@@ -251,6 +253,8 @@ def list_query_runs(
         query = query.filter(QueryRun.request_id == request_id)
     if status:
         query = query.filter(QueryRun.status == status.value)
+    if verification_status:
+        query = query.filter(QueryRun.verification_status == verification_status.value)
 
     total = query.order_by(None).count()
     query_runs = (

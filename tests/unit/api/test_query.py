@@ -930,6 +930,170 @@ def test_list_query_run_endpoint_filters_by_status() -> None:
         db.close()
 
 
+def test_list_query_run_endpoint_filters_by_verification_status() -> None:
+    db = create_test_db()
+    try:
+        document_id = uuid4()
+        chunk_id = uuid4()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        passed_run_id = uuid4()
+        failed_run_id = uuid4()
+        skipped_run_id = uuid4()
+        not_required_run_id = uuid4()
+        passed_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(query="passed query", workspace_id="workspace-a"),
+            agent_run_id=passed_run_id,
+            request_id="request-id-passed",
+        )
+        failed_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(
+                query="failed verification query",
+                workspace_id="workspace-a",
+            ),
+            agent_run_id=failed_run_id,
+            request_id="request-id-failed",
+        )
+        skipped_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(
+                query="skipped verification query",
+                workspace_id="workspace-a",
+            ),
+            agent_run_id=skipped_run_id,
+            request_id="request-id-skipped",
+        )
+        not_required_run = create_query_run(
+            user_context=user_context,
+            db=db,
+            request=QueryRequest(
+                query="no synthesis query",
+                workspace_id="workspace-a",
+            ),
+            agent_run_id=not_required_run_id,
+            request_id="request-id-not-required",
+        )
+
+        mark_query_run_completed(
+            db=db,
+            query_run=passed_run,
+            response=QueryResponse(
+                agent_run_id=passed_run_id,
+                answer="Security policy content [1].",
+                citations=[
+                    Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=1.2,
+                    )
+                ],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=25,
+                verification_status=AnswerVerificationStatus.PASSED,
+                verification_reason="Answer citations match retrieved context.",
+            ),
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=failed_run,
+            response=QueryResponse(
+                agent_run_id=failed_run_id,
+                answer="Security policy content without citation.",
+                citations=[],
+                context_token_count=3,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=31,
+                verification_status=AnswerVerificationStatus.FAILED,
+                verification_reason="Answer did not cite retrieved context.",
+            ),
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=skipped_run,
+            response=QueryResponse(
+                agent_run_id=skipped_run_id,
+                answer="Synthesis failed before verification.",
+                citations=[],
+                context_token_count=0,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=19,
+                verification_status=AnswerVerificationStatus.SKIPPED,
+                verification_reason="LLM synthesis failed before verification.",
+            ),
+        )
+        mark_query_run_completed(
+            db=db,
+            query_run=not_required_run,
+            response=QueryResponse(
+                agent_run_id=not_required_run_id,
+                answer="Security policy content.",
+                citations=[],
+                context_token_count=0,
+                confidence_score=0.0,
+                retrieval_strategy=RetrievalStrategy.BM25,
+                latency_ms=11,
+            ),
+        )
+
+        for client in client_with_user(user_context, db):
+            passed_response = client.get(
+                "/query?page=1&size=20&verification_status=passed"
+            )
+            failed_response = client.get(
+                "/query?page=1&size=20&verification_status=failed"
+            )
+            skipped_response = client.get(
+                "/query?page=1&size=20&verification_status=skipped"
+            )
+            not_required_response = client.get(
+                "/query?page=1&size=20&verification_status=not_required"
+            )
+
+        passed_body = passed_response.json()
+        failed_body = failed_response.json()
+        skipped_body = skipped_response.json()
+        not_required_body = not_required_response.json()
+
+        assert passed_response.status_code == 200
+        assert passed_body["page"]["total"] == 1
+        assert passed_body["items"][0]["agent_run_id"] == str(passed_run_id)
+        assert passed_body["items"][0]["verification_status"] == "passed"
+        assert failed_response.status_code == 200
+        assert failed_body["page"]["total"] == 1
+        assert failed_body["items"][0]["agent_run_id"] == str(failed_run_id)
+        assert failed_body["items"][0]["verification_status"] == "failed"
+        assert skipped_response.status_code == 200
+        assert skipped_body["page"]["total"] == 1
+        assert skipped_body["items"][0]["agent_run_id"] == str(skipped_run_id)
+        assert skipped_body["items"][0]["verification_status"] == "skipped"
+        assert not_required_response.status_code == 200
+        assert not_required_body["page"]["total"] == 1
+        assert not_required_body["items"][0]["agent_run_id"] == str(
+            not_required_run_id
+        )
+        assert (
+            not_required_body["items"][0]["verification_status"] == "not_required"
+        )
+    finally:
+        db.close()
+
+
 def test_list_query_run_endpoint_rejects_invalid_status_filter() -> None:
     db = create_test_db()
     try:
@@ -943,6 +1107,27 @@ def test_list_query_run_endpoint_rejects_invalid_status_filter() -> None:
 
         for client in client_with_user(user_context, db):
             response = client.get("/query?page=1&size=20&status=unknown")
+
+        assert response.status_code == 422
+    finally:
+        db.close()
+
+
+def test_list_query_run_endpoint_rejects_invalid_verification_status_filter() -> None:
+    db = create_test_db()
+    try:
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.get(
+                "/query?page=1&size=20&verification_status=unknown"
+            )
 
         assert response.status_code == 422
     finally:

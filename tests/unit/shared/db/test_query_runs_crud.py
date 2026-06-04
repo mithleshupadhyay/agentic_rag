@@ -444,6 +444,179 @@ def test_list_query_runs_filters_by_status(db: Session) -> None:
     assert [query_run.id for query_run in running_runs] == [running_run_id]
 
 
+def test_list_query_runs_filters_by_verification_status(db: Session) -> None:
+    add_tenant(db, "tenant-a")
+    add_tenant(db, "tenant-b")
+    document_id = uuid4()
+    chunk_id = uuid4()
+    tenant_a_context = UserContext(
+        id="user-a",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+    tenant_b_context = UserContext(
+        id="user-b",
+        customer_id="tenant-b",
+        tenant_id="tenant-b",
+    )
+    passed_run_id = uuid4()
+    failed_run_id = uuid4()
+    skipped_run_id = uuid4()
+    not_required_run_id = uuid4()
+    tenant_b_run_id = uuid4()
+
+    passed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="passed query"),
+        agent_run_id=passed_run_id,
+    )
+    failed_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="failed verification query"),
+        agent_run_id=failed_run_id,
+    )
+    skipped_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="skipped verification query"),
+        agent_run_id=skipped_run_id,
+    )
+    not_required_run = create_query_run(
+        user_context=tenant_a_context,
+        db=db,
+        request=QueryRequest(query="no synthesis query"),
+        agent_run_id=not_required_run_id,
+    )
+    tenant_b_run = create_query_run(
+        user_context=tenant_b_context,
+        db=db,
+        request=QueryRequest(query="tenant b query"),
+        agent_run_id=tenant_b_run_id,
+    )
+
+    mark_query_run_completed(
+        db=db,
+        query_run=passed_run,
+        response=QueryResponse(
+            agent_run_id=passed_run_id,
+            answer="Security policy content [1].",
+            citations=[
+                Citation(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    title="Security Policy",
+                    quote="Security policy content.",
+                    score=1.2,
+                )
+            ],
+            context_token_count=3,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=25,
+            verification_status=AnswerVerificationStatus.PASSED,
+            verification_reason="Answer citations match retrieved context.",
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=failed_run,
+        response=QueryResponse(
+            agent_run_id=failed_run_id,
+            answer="Security policy content without citation.",
+            citations=[],
+            context_token_count=3,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=31,
+            verification_status=AnswerVerificationStatus.FAILED,
+            verification_reason="Answer did not cite retrieved context.",
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=skipped_run,
+        response=QueryResponse(
+            agent_run_id=skipped_run_id,
+            answer="Synthesis failed before verification.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=19,
+            verification_status=AnswerVerificationStatus.SKIPPED,
+            verification_reason="LLM synthesis failed before verification.",
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=not_required_run,
+        response=QueryResponse(
+            agent_run_id=not_required_run_id,
+            answer="Security policy content.",
+            citations=[],
+            context_token_count=0,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=11,
+        ),
+    )
+    mark_query_run_completed(
+        db=db,
+        query_run=tenant_b_run,
+        response=QueryResponse(
+            agent_run_id=tenant_b_run_id,
+            answer="Tenant B security policy content [1].",
+            citations=[
+                Citation(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    title="Tenant B Security Policy",
+                    quote="Tenant B security policy content.",
+                    score=1.1,
+                )
+            ],
+            context_token_count=3,
+            confidence_score=0.0,
+            retrieval_strategy=RetrievalStrategy.BM25,
+            latency_ms=23,
+            verification_status=AnswerVerificationStatus.PASSED,
+            verification_reason="Answer citations match retrieved context.",
+        ),
+    )
+
+    passed_runs, passed_total = list_query_runs(
+        db,
+        "tenant-a",
+        verification_status=AnswerVerificationStatus.PASSED,
+    )
+    failed_runs, failed_total = list_query_runs(
+        db,
+        "tenant-a",
+        verification_status=AnswerVerificationStatus.FAILED,
+    )
+    skipped_runs, skipped_total = list_query_runs(
+        db,
+        "tenant-a",
+        verification_status=AnswerVerificationStatus.SKIPPED,
+    )
+    not_required_runs, not_required_total = list_query_runs(
+        db,
+        "tenant-a",
+        verification_status=AnswerVerificationStatus.NOT_REQUIRED,
+    )
+
+    assert passed_total == 1
+    assert [query_run.id for query_run in passed_runs] == [passed_run_id]
+    assert failed_total == 1
+    assert [query_run.id for query_run in failed_runs] == [failed_run_id]
+    assert skipped_total == 1
+    assert [query_run.id for query_run in skipped_runs] == [skipped_run_id]
+    assert not_required_total == 1
+    assert [query_run.id for query_run in not_required_runs] == [not_required_run_id]
+
+
 def test_create_query_run_rolls_back_on_integrity_error(db: Session) -> None:
     add_tenant(db, "tenant-a")
     user_context = UserContext(

@@ -451,6 +451,7 @@ def list_query_run_endpoint(
     user_id: str | None = None,
     request_id: str | None = None,
     status: QueryRunStatus | None = None,
+    verification_status: AnswerVerificationStatus | None = None,
     user_context: UserContext = Depends(require_scope("query:run")),
     db: Session = Depends(get_session),
 ) -> QueryRunSearchResponse:
@@ -462,7 +463,8 @@ def list_query_run_endpoint(
     logger.info(
         f"[QueryAPI] Listing query runs tenant={user_context.tenant_id} "
         f"user={user_context.id} page={page} size={size} "
-        f"request_id={request_id} status={status.value if status else None}"
+        f"request_id={request_id} status={status.value if status else None} "
+        f"verification_status={verification_status.value if verification_status else None}"
     )
     effective_workspace_id = workspace_id
     if user_context.workspace_id:
@@ -494,6 +496,7 @@ def list_query_run_endpoint(
         user_id=effective_user_id,
         request_id=request_id,
         status=status,
+        verification_status=verification_status,
     )
     logger.info(
         f"[QueryAPI] Listed {len(query_runs)} query runs tenant={user_context.tenant_id} "

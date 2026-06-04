@@ -877,6 +877,8 @@ GET /query
 - Workspace-bound users only see their workspace.
 - Supports optional `status` filtering with `queued`, `running`, `completed`,
   `failed`, and `cancelled`.
+- Supports optional `verification_status` filtering with `not_required`,
+  `passed`, `failed`, and `skipped`.
 
 GET /query/{agent_run_id}
 - Returns one tenant-scoped query run by run id.
