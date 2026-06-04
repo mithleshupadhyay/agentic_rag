@@ -313,17 +313,26 @@ def run_bm25_query(
                     confidence_score = min(confidence_score, 0.35)
 
             except Exception as e:
+                synthesis_error_type = type(e).__name__
                 logger.exception(
                     f"[Query] LLM synthesis failed tenant={user_context.tenant_id} "
-                    f"user={user_context.id} request_id={request_id}: {e}"
+                    f"user={user_context.id} request_id={request_id} "
+                    f"error_type={synthesis_error_type}"
+                )
+                context_chunk_label = (
+                    "chunk" if len(context_response.context) == 1 else "chunks"
                 )
                 answer = (
-                    "Retrieved context for this query, but answer synthesis failed. "
+                    f"Retrieved {len(context_response.context)} authorized context "
+                    f"{context_chunk_label}, but answer synthesis failed. "
                     "Use the returned context and citations for review."
                 )
                 synthesis_error = "LLM synthesis failed"
                 verification_status = AnswerVerificationStatus.SKIPPED
-                verification_reason = "LLM synthesis failed before verification."
+                verification_reason = (
+                    "LLM synthesis failed before verification. "
+                    f"error_type={synthesis_error_type}"
+                )
                 confidence_score = min(confidence_score, 0.35)
 
         latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
@@ -364,28 +373,35 @@ def run_bm25_query(
                 response=response,
             )
         if settings.query_cache_enabled and redis_client is not None and query_cache_key:
-            try:
-                # Store only a successful response payload.
-                redis_client.setex(
-                    query_cache_key,
-                    settings.query_cache_ttl_seconds,
-                    json.dumps(
-                        response.model_dump(mode="json"),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                )
+            if synthesis_error:
                 logger.info(
-                    f"[Query] BM25 query cached tenant={user_context.tenant_id} "
-                    f"user={user_context.id} request_id={request_id} "
-                    f"ttl_seconds={settings.query_cache_ttl_seconds}"
-                )
-            except (RedisError, TypeError, ValueError) as e:
-                logger.warning(
                     f"[Query] BM25 query cache write skipped "
                     f"tenant={user_context.tenant_id} user={user_context.id} "
-                    f"request_id={request_id} error_type={type(e).__name__}"
+                    f"request_id={request_id} synthesis_error={synthesis_error}"
                 )
+            else:
+                try:
+                    # Store only a successful response payload.
+                    redis_client.setex(
+                        query_cache_key,
+                        settings.query_cache_ttl_seconds,
+                        json.dumps(
+                            response.model_dump(mode="json"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                    logger.info(
+                        f"[Query] BM25 query cached tenant={user_context.tenant_id} "
+                        f"user={user_context.id} request_id={request_id} "
+                        f"ttl_seconds={settings.query_cache_ttl_seconds}"
+                    )
+                except (RedisError, TypeError, ValueError) as e:
+                    logger.warning(
+                        f"[Query] BM25 query cache write skipped "
+                        f"tenant={user_context.tenant_id} user={user_context.id} "
+                        f"request_id={request_id} error_type={type(e).__name__}"
+                    )
         return response
 
     except Exception as e:

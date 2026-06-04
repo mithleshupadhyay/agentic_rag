@@ -294,6 +294,124 @@ def test_query_endpoint_persists_synthesized_answer(monkeypatch) -> None:
         db.close()
 
 
+def test_query_endpoint_persists_synthesis_fallback(monkeypatch) -> None:
+    db = create_test_db()
+    try:
+        document_id = uuid4()
+        chunk_id = uuid4()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        def fake_search_bm25_chunks(user_context, query, filters, limit):
+            return RetrievalResponse(
+                strategy=RetrievalStrategy.BM25,
+                candidates=[
+                    CandidateChunk(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        content="Security policy content.",
+                        score=2.3,
+                        source=RetrievalTool.BM25_SEARCH,
+                        metadata={"token_count": 3},
+                        citation=Citation(
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            title="Security Policy",
+                            source_uri="upload://security-policy.txt",
+                            quote="Security policy content.",
+                            score=2.3,
+                        ),
+                    )
+                ],
+                latency_ms=11,
+            )
+
+        def fake_generate_chat_completion(request):
+            raise RuntimeError("provider timeout")
+
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.search_bm25_chunks",
+            fake_search_bm25_chunks,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.generate_chat_completion",
+            fake_generate_chat_completion,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+            False,
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.post(
+                "/query",
+                headers={"X-Request-ID": "fallback-request-id"},
+                json={
+                    "query": "security policy",
+                    "workspace_id": "workspace-a",
+                    "retrieval_limit": 8,
+                    "max_context_chunks": 3,
+                    "max_context_tokens": 500,
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["answer"] == (
+            "Retrieved 1 authorized context chunk, but answer synthesis failed. "
+            "Use the returned context and citations for review."
+        )
+        assert body["synthesis_enabled"] is False
+        assert body["synthesis_error"] == "LLM synthesis failed"
+        assert body["verification_status"] == "skipped"
+        assert body["verification_reason"] == (
+            "LLM synthesis failed before verification. error_type=RuntimeError"
+        )
+        assert body["llm_provider"] is None
+        assert body["llm_model"] is None
+        assert body["llm_input_tokens"] == 0
+        assert body["llm_output_tokens"] == 0
+        assert body["llm_cost_estimate"] == 0.0
+        assert body["context_token_count"] == 3
+        assert body["context"][0]["content"] == "Security policy content."
+        assert body["citations"][0]["title"] == "Security Policy"
+
+        query_run = get_query_run(
+            db=db,
+            agent_run_id=UUID(body["agent_run_id"]),
+            tenant_id="tenant-a",
+        )
+        assert query_run is not None
+        assert query_run.status == "completed"
+        assert query_run.request_id == "fallback-request-id"
+        assert query_run.answer == body["answer"]
+        assert query_run.synthesis_enabled is False
+        assert query_run.error_type is None
+        assert query_run.error_message == "LLM synthesis failed"
+        assert query_run.verification_status == "skipped"
+        assert query_run.verification_reason == (
+            "LLM synthesis failed before verification. error_type=RuntimeError"
+        )
+        assert query_run.llm_provider is None
+        assert query_run.llm_model is None
+        assert query_run.llm_input_tokens == 0
+        assert query_run.llm_output_tokens == 0
+        assert query_run.llm_cost_estimate == 0.0
+        assert query_run.response_payload["synthesis_error"] == "LLM synthesis failed"
+        assert query_run.response_payload["verification_status"] == "skipped"
+    finally:
+        db.close()
+
+
 def test_query_endpoint_requires_query_scope() -> None:
     user_context = UserContext(
         id="user-1",

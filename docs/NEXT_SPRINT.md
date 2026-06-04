@@ -64,7 +64,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add richer retry metadata and replay support when graph replay is selected. | High |
 | `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, persists replay metadata summaries through agent-run CRUD, exposes runtime streaming events for step progress and answer tokens, and supplies terminal response data to the query stream API. | Add replay API contracts only when a user-facing or operator-facing replay endpoint is selected. | High |
-| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, context building, deterministic answer confidence scoring, optional LLM synthesis, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add stronger fallback handling. | High |
+| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, context building, deterministic answer confidence scoring, optional LLM synthesis, safe LLM failure fallback without caching failed synthesis responses, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add no-result response behavior hardening and cache metadata when production behavior needs it. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
@@ -88,7 +88,7 @@ retrieval quality, and production operations.
 | `tests/unit/api/test_documents.py` | Document API tests, including upload behavior. | Add more authorization edge cases, idempotent upload tests, ingestion status tests, and large file validation tests. | High |
 | `tests/unit/api/test_health.py` | Health API tests. | Add readiness dependency status tests and degraded/unhealthy response tests. | Medium |
 | `tests/unit/api/test_retrieval.py` | Retrieval API tests for BM25, vector, hybrid search, and rerank endpoints. | Add error mapping, empty-result behavior, mocked OpenSearch failures, and integration smoke tests for `/retrieval/bm25-search`, `/retrieval/vector-search`, `/retrieval/hybrid-search`, and `/retrieval/rerank`. | High |
-| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, admin query-run listing coverage, query-run cancellation authorization, agent runtime streaming response tests, token event tests, query lifecycle metric assertions, and LLM synthesis persistence coverage. | Add richer failure fallback tests. | High |
+| `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, admin query-run listing coverage, query-run cancellation authorization, agent runtime streaming response tests, token event tests, query lifecycle metric assertions, LLM synthesis persistence coverage, and synthesis fallback persistence coverage. | Keep coverage updated alongside production query behavior changes. | High |
 | `tests/unit/core/test_auth.py` | Auth tests. | Add OIDC JWKS cache tests, invalid issuer/audience tests, tenant claim mapping tests, and scope mapping tests. | High |
 | `tests/unit/core/test_authorization.py` | Authorization tests. | Add chunk ACL filtering tests, workspace isolation tests, group access tests, deny-rule tests, and retrieval authorization tests. | High |
 | `tests/unit/shared/db/test_document_crud.py` | Document CRUD tests. | Add bulk chunk insert tests, idempotency tests, status transition tests, soft delete restore tests, and tenant leak prevention tests. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Refined BM25 query fallback behavior for LLM synthesis failures and avoided caching failed synthesis responses. |
 | 2026-06-04 | Added query synthesis API coverage for synthesized response metadata and persisted query-run fields. |
 | 2026-06-04 | Moved query response OpenAPI examples to final polish and set query synthesis API coverage as the next implementation slice. |
 | 2026-06-04 | Added admin query-run listing coverage for same-tenant user, workspace, status, verification-status, and date filters. |
@@ -156,7 +157,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query failure fallback API coverage. |
+| 1 | Add BM25 retrieval score threshold handling. |
 
 ## Lowest Priority Final Polish
 

@@ -403,6 +403,7 @@ def test_run_bm25_query_rejects_synthesized_answer_with_unknown_citation(
 def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> None:
     document_id = uuid4()
     chunk_id = uuid4()
+    fake_redis = FakeQueryCacheRedis()
 
     def fake_search_bm25_chunks(user_context, query, filters, limit):
         return RetrievalResponse(
@@ -439,8 +440,20 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
         fake_generate_chat_completion,
     )
     monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.Redis.from_url",
+        lambda *args, **kwargs: fake_redis,
+    )
+    monkeypatch.setattr(
         "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
         True,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_key_prefix",
+        "agentic-rag:test:query",
     )
     user_context = UserContext(
         id="user-1",
@@ -461,10 +474,17 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.llm_cost_estimate == 0.0
     assert response.confidence_score == 0.35
     assert response.verification_status == AnswerVerificationStatus.SKIPPED
-    assert response.verification_reason == "LLM synthesis failed before verification."
+    assert response.verification_reason == (
+        "LLM synthesis failed before verification. error_type=RuntimeError"
+    )
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
-    assert "answer synthesis failed" in response.answer
+    assert response.answer == (
+        "Retrieved 1 authorized context chunk, but answer synthesis failed. "
+        "Use the returned context and citations for review."
+    )
+    assert fake_redis.get_calls
+    assert fake_redis.setex_calls == []
 
 
 def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
