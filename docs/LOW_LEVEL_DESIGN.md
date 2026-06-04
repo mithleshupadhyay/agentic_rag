@@ -708,9 +708,9 @@ user query
 ```
 
 The current query path implements this incrementally with BM25 retrieval,
-context building, and deterministic answer verification first. Later steps add
-planner/tool routing, reformulation, vector search, web search, and full agent
-runtime.
+context building, deterministic confidence scoring, and deterministic answer
+verification first. Later steps add planner/tool routing, reformulation, vector
+search, web search, and full agent runtime.
 
 Current query metrics are defined in `src/agentic_rag/monitoring/metrics.py`
 and exposed through the existing `/metrics` endpoint:
@@ -778,6 +778,13 @@ returned context using bracket numbers such as `[1]`; the verifier rejects
 answers with missing citations or citations that do not map to the returned
 context. When verification fails, the API keeps the retrieved context and
 citations in the response but returns a safe fallback answer.
+
+Current answer confidence is deterministic. The BM25 query path scores returned
+answers from retrieval strength, context coverage, citation coverage, token
+coverage, and verified LLM synthesis. Empty retrieval returns `0.0`. Retrieved
+context without synthesis is capped below verified synthesis. Failed synthesis or
+failed citation verification keeps the returned context but caps answer
+confidence at a low fallback value.
 
 Request:
 

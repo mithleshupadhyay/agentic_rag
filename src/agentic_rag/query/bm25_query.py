@@ -52,7 +52,7 @@ def run_bm25_query(
             raise HTTPException(
                 status_code=400,
                 detail="workspace_id must match filters.workspace_id when both are provided.",
-        )
+            )
         filters.workspace_id = request.workspace_id
 
     # Use a caller-provided id when streaming announced the run first.
@@ -85,10 +85,11 @@ def run_bm25_query(
         )
 
         citations = [
-            context_chunk.citation
-            for context_chunk in context_response.context
+            context_chunk.citation for context_chunk in context_response.context
         ]
-        answer = "No relevant context was found for this query. Retrieved 0 context chunks."
+        answer = (
+            "No relevant context was found for this query. Retrieved 0 context chunks."
+        )
         synthesis_enabled = False
         synthesis_error = None
         llm_provider = None
@@ -96,17 +97,49 @@ def run_bm25_query(
         llm_input_tokens = 0
         llm_output_tokens = 0
         llm_cost_estimate = 0.0
+        confidence_score = 0.0
 
         if context_response.context:
             answer = (
                 "LLM synthesis is not enabled yet. "
                 f"Retrieved {len(context_response.context)} context chunks for this query."
             )
+            top_candidate_score = 0.0
+            for candidate in retrieval_response.candidates:
+                if candidate.score > top_candidate_score:
+                    top_candidate_score = candidate.score
+
+            retrieval_strength = min(top_candidate_score / 5.0, 1.0)
+            context_coverage = min(
+                len(context_response.context) / request.max_context_chunks,
+                1.0,
+            )
+            citation_coverage = min(
+                len(citations) / len(context_response.context),
+                1.0,
+            )
+            token_coverage = min(
+                context_response.token_count / request.max_context_tokens,
+                1.0,
+            )
+            confidence_score = round(
+                min(
+                    0.70,
+                    0.25
+                    + (retrieval_strength * 0.25)
+                    + (context_coverage * 0.15)
+                    + (citation_coverage * 0.20)
+                    + (token_coverage * 0.05),
+                ),
+                2,
+            )
 
         if settings.llm_synthesis_enabled and context_response.context:
             try:
                 context_lines = []
-                for index, context_chunk in enumerate(context_response.context, start=1):
+                for index, context_chunk in enumerate(
+                    context_response.context, start=1
+                ):
                     citation = context_chunk.citation
                     title = citation.title or "Untitled document"
                     source_uri = citation.source_uri or "unknown source"
@@ -166,6 +199,10 @@ def run_bm25_query(
                 if verification_result.passed:
                     answer = llm_response.text
                     synthesis_enabled = True
+                    confidence_score = round(
+                        min(0.95, confidence_score + 0.25),
+                        2,
+                    )
                 else:
                     logger.warning(
                         f"[Query] LLM answer verification failed "
@@ -178,6 +215,7 @@ def run_bm25_query(
                         "Use the returned context and citations for review."
                     )
                     synthesis_error = "LLM answer verification failed"
+                    confidence_score = min(confidence_score, 0.35)
 
             except Exception as e:
                 logger.exception(
@@ -189,6 +227,7 @@ def run_bm25_query(
                     "Use the returned context and citations for review."
                 )
                 synthesis_error = "LLM synthesis failed"
+                confidence_score = min(confidence_score, 0.35)
 
         latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
 
@@ -197,6 +236,7 @@ def run_bm25_query(
             f"user={user_context.id} request_id={request_id} "
             f"candidates={len(retrieval_response.candidates)} "
             f"context_chunks={len(context_response.context)} synthesis_enabled={synthesis_enabled} "
+            f"confidence_score={confidence_score} "
             f"latency_ms={latency_ms}"
         )
         response = QueryResponse(
@@ -206,7 +246,7 @@ def run_bm25_query(
             candidates=retrieval_response.candidates,
             context=context_response.context,
             context_token_count=context_response.token_count,
-            confidence_score=0.0,
+            confidence_score=confidence_score,
             retrieval_strategy=RetrievalStrategy.BM25,
             latency_ms=latency_ms,
             synthesis_enabled=synthesis_enabled,

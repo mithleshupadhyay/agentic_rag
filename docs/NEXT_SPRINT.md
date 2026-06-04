@@ -64,7 +64,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add richer retry metadata and replay support when graph replay is selected. | High |
 | `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, persists replay metadata summaries through agent-run CRUD, exposes runtime streaming events for step progress and answer tokens, and supplies terminal response data to the query stream API. | Add replay API contracts only when a user-facing or operator-facing replay endpoint is selected. | High |
-| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, answer confidence calculation, verification metadata, and stronger fallback handling. | High |
+| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, context building, deterministic answer confidence scoring, optional LLM synthesis, answer verification, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache lookup, verification metadata, and stronger fallback handling. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search. | Add score thresholds, metadata filters, date filters, better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-04 | Added deterministic query answer confidence scoring from retrieval, context, citation, and verified synthesis signals. |
 | 2026-06-04 | Added persisted graph replay metadata for retrieval, context building, answer generation, and grounding verification nodes. |
 | 2026-06-04 | Added local monitoring smoke checks for Prometheus alert loading and Grafana dashboard provisioning. |
 | 2026-06-04 | Added LLM provider health dashboard panels and Prometheus alert rules. |
@@ -146,5 +147,5 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add cache lookup and answer confidence calculation to query orchestration. |
+| 1 | Add cache lookup to query orchestration. |
 | 2 | Add richer verification status and status filtering to query-run APIs. |

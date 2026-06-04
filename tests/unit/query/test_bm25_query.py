@@ -77,7 +77,7 @@ def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
 
     assert response.retrieval_strategy == RetrievalStrategy.BM25
     assert response.synthesis_enabled is False
-    assert response.confidence_score == 0.0
+    assert response.confidence_score == 0.62
     assert response.candidates[0].chunk_id == chunk_id
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
@@ -136,6 +136,7 @@ def test_run_bm25_query_handles_empty_retrieval(monkeypatch) -> None:
     assert response.context == []
     assert response.citations == []
     assert response.context_token_count == 0
+    assert response.confidence_score == 0.0
     assert "Retrieved 0 context chunks" in response.answer
 
 
@@ -204,8 +205,12 @@ def test_run_bm25_query_synthesizes_answer_when_enabled(monkeypatch) -> None:
         request=QueryRequest(query="security policy", workspace_id="workspace-a"),
     )
 
-    assert response.answer == "Security policy content is available in the retrieved document [1]."
+    assert (
+        response.answer
+        == "Security policy content is available in the retrieved document [1]."
+    )
     assert response.synthesis_enabled is True
+    assert response.confidence_score == 0.83
     assert response.llm_provider == "litellm"
     assert response.llm_model == "gemini/gemini-2.0-flash"
     assert response.llm_input_tokens == 128
@@ -284,6 +289,7 @@ def test_run_bm25_query_rejects_synthesized_answer_without_citation(
     assert response.llm_input_tokens == 128
     assert response.llm_output_tokens == 14
     assert response.llm_cost_estimate == 0.001
+    assert response.confidence_score == 0.35
     assert "could not be verified" in response.answer
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
@@ -354,6 +360,7 @@ def test_run_bm25_query_rejects_synthesized_answer_with_unknown_citation(
 
     assert response.synthesis_enabled is False
     assert response.synthesis_error == "LLM answer verification failed"
+    assert response.confidence_score == 0.35
     assert "could not be verified" in response.answer
     assert response.citations[0].title == "Security Policy"
 
@@ -417,6 +424,7 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.llm_input_tokens == 0
     assert response.llm_output_tokens == 0
     assert response.llm_cost_estimate == 0.0
+    assert response.confidence_score == 0.35
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert "answer synthesis failed" in response.answer
@@ -480,7 +488,9 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
             db=db,
             request_id="request-id-1",
         )
-        query_run = db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
+        query_run = (
+            db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
+        )
 
         assert query_run.status == "completed"
         assert query_run.tenant_id == "tenant-a"
@@ -491,6 +501,8 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.latency_ms is not None
         assert query_run.latency_ms >= 0
         assert query_run.context_token_count == response.context_token_count
+        assert query_run.confidence_score == response.confidence_score
+        assert query_run.confidence_score == 0.58
         assert query_run.llm_input_tokens == 0
         assert query_run.llm_output_tokens == 0
         assert query_run.llm_cost_estimate == 0.0
