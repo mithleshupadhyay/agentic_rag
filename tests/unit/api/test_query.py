@@ -2,7 +2,7 @@ import json
 import logging
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
@@ -16,12 +16,14 @@ from agentic_rag.main import app
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.query_runs import (
     create_query_run,
+    get_query_run,
     mark_query_run_completed,
     mark_query_run_failed,
 )
 from agentic_rag.shared.db.models import Tenant
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.schemas.common import Citation
+from agentic_rag.shared.schemas.llm import LLMResponse
 from agentic_rag.shared.schemas.agent import (
     AgentRunStatus,
     AgentStreamEvent,
@@ -33,8 +35,11 @@ from agentic_rag.shared.schemas.query import (
     QueryResponse,
 )
 from agentic_rag.shared.schemas.retrieval import (
+    CandidateChunk,
     ContextChunk,
+    RetrievalResponse,
     RetrievalStrategy,
+    RetrievalTool,
 )
 
 
@@ -159,6 +164,134 @@ def test_query_endpoint_returns_grounded_retrieval_output(monkeypatch, caplog) -
     assert captured["request_id"] == "query-request-id"
     assert response.headers["X-Request-ID"] == "query-request-id"
     assert "request_id=query-request-id" in caplog.text
+
+
+def test_query_endpoint_persists_synthesized_answer(monkeypatch) -> None:
+    db = create_test_db()
+    try:
+        document_id = uuid4()
+        chunk_id = uuid4()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+        captured = {}
+
+        def fake_search_bm25_chunks(user_context, query, filters, limit):
+            captured["query"] = query
+            captured["filters"] = filters
+            captured["limit"] = limit
+            return RetrievalResponse(
+                strategy=RetrievalStrategy.BM25,
+                candidates=[
+                    CandidateChunk(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        content="Security policy content.",
+                        score=2.3,
+                        source=RetrievalTool.BM25_SEARCH,
+                        metadata={"token_count": 3},
+                        citation=Citation(
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            title="Security Policy",
+                            source_uri="upload://security-policy.txt",
+                            quote="Security policy content.",
+                            score=2.3,
+                        ),
+                    )
+                ],
+                latency_ms=11,
+            )
+
+        def fake_generate_chat_completion(request):
+            captured["llm_request"] = request
+            return LLMResponse(
+                text="Security policy content is available in the retrieved document [1].",
+                model="gemini/gemini-2.0-flash",
+                provider="litellm",
+                input_tokens=128,
+                output_tokens=14,
+                cost_estimate=0.001,
+                latency_ms=20,
+            )
+
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.search_bm25_chunks",
+            fake_search_bm25_chunks,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.generate_chat_completion",
+            fake_generate_chat_completion,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+            False,
+        )
+
+        for client in client_with_user(user_context, db):
+            response = client.post(
+                "/query",
+                headers={"X-Request-ID": "synthesis-request-id"},
+                json={
+                    "query": "security policy",
+                    "workspace_id": "workspace-a",
+                    "retrieval_limit": 8,
+                    "max_context_chunks": 3,
+                    "max_context_tokens": 500,
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert (
+            body["answer"]
+            == "Security policy content is available in the retrieved document [1]."
+        )
+        assert body["synthesis_enabled"] is True
+        assert body["llm_provider"] == "litellm"
+        assert body["llm_model"] == "gemini/gemini-2.0-flash"
+        assert body["llm_input_tokens"] == 128
+        assert body["llm_output_tokens"] == 14
+        assert body["llm_cost_estimate"] == 0.001
+        assert body["verification_status"] == "passed"
+        assert body["verification_reason"] == "Answer citations match retrieved context."
+        assert body["context_token_count"] == 3
+        assert body["citations"][0]["title"] == "Security Policy"
+        assert response.headers["X-Request-ID"] == "synthesis-request-id"
+        assert captured["query"] == "security policy"
+        assert captured["filters"].workspace_id == "workspace-a"
+        assert captured["limit"] == 8
+        assert "Use only the authorized context" in captured["llm_request"].messages[0].content
+        assert "Security policy content." in captured["llm_request"].messages[1].content
+
+        query_run = get_query_run(
+            db=db,
+            agent_run_id=UUID(body["agent_run_id"]),
+            tenant_id="tenant-a",
+        )
+        assert query_run is not None
+        assert query_run.request_id == "synthesis-request-id"
+        assert query_run.status == "completed"
+        assert query_run.synthesis_enabled is True
+        assert query_run.llm_provider == "litellm"
+        assert query_run.llm_model == "gemini/gemini-2.0-flash"
+        assert query_run.llm_input_tokens == 128
+        assert query_run.llm_output_tokens == 14
+        assert query_run.llm_cost_estimate == 0.001
+        assert query_run.verification_status == "passed"
+        assert query_run.verification_reason == "Answer citations match retrieved context."
+        assert query_run.response_payload["verification_status"] == "passed"
+        assert query_run.response_payload["synthesis_enabled"] is True
+    finally:
+        db.close()
 
 
 def test_query_endpoint_requires_query_scope() -> None:
