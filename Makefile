@@ -30,7 +30,7 @@ help:
 	@printf '%s\n' "  make docker-smoke-kafka-consumer Consume one retry event and complete an ingestion job"
 
 test:
-	poetry run pytest
+	poetry run pytest -vv
 
 lint:
 	poetry run ruff check .
