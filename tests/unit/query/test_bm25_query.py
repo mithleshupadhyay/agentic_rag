@@ -137,6 +137,9 @@ def test_run_bm25_query_rejects_workspace_conflict() -> None:
 
 
 def test_run_bm25_query_handles_empty_retrieval(monkeypatch) -> None:
+    def fail_generate_chat_completion(request):
+        raise AssertionError("LLM should not run when no authorized context is available")
+
     def fake_search_bm25_chunks(user_context, query, filters, limit):
         return RetrievalResponse(
             strategy=RetrievalStrategy.BM25,
@@ -147,6 +150,14 @@ def test_run_bm25_query_handles_empty_retrieval(monkeypatch) -> None:
     monkeypatch.setattr(
         "agentic_rag.query.bm25_query.search_bm25_chunks",
         fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.generate_chat_completion",
+        fail_generate_chat_completion,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
+        True,
     )
     user_context = UserContext(
         id="user-1",
@@ -164,7 +175,21 @@ def test_run_bm25_query_handles_empty_retrieval(monkeypatch) -> None:
     assert response.citations == []
     assert response.context_token_count == 0
     assert response.confidence_score == 0.0
-    assert "Retrieved 0 context chunks" in response.answer
+    assert response.synthesis_enabled is False
+    assert response.synthesis_error is None
+    assert response.llm_provider is None
+    assert response.llm_model is None
+    assert response.llm_input_tokens == 0
+    assert response.llm_output_tokens == 0
+    assert response.llm_cost_estimate == 0.0
+    assert response.verification_status == AnswerVerificationStatus.SKIPPED
+    assert response.verification_reason == (
+        "No authorized context was found, so answer synthesis and verification were skipped."
+    )
+    assert response.answer == (
+        "I could not find relevant authorized context for this query. "
+        "Try a more specific query or adjust filters if you expected matching documents."
+    )
 
 
 def test_run_bm25_query_synthesizes_answer_when_enabled(monkeypatch) -> None:
@@ -568,6 +593,87 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.response_payload["verification_status"] == "not_required"
         assert query_run.citations["items"][0]["title"] == "Security Policy"
+
+
+def test_run_bm25_query_persists_no_result_as_completed(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    def fail_generate_chat_completion(request):
+        raise AssertionError("LLM should not run when no authorized context is available")
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[],
+            latency_ms=3,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.generate_chat_completion",
+        fail_generate_chat_completion,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
+        True,
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+        )
+
+        response = run_bm25_query(
+            user_context=user_context,
+            request=QueryRequest(query="unknown policy", workspace_id="workspace-a"),
+            db=db,
+            request_id="request-id-no-result",
+        )
+        query_run = (
+            db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
+        )
+
+        assert query_run.status == "completed"
+        assert query_run.request_id == "request-id-no-result"
+        assert query_run.answer == response.answer
+        assert query_run.citations == {"items": []}
+        assert query_run.candidates == {"items": []}
+        assert query_run.context == {"items": []}
+        assert query_run.context_token_count == 0
+        assert query_run.confidence_score == 0.0
+        assert query_run.synthesis_enabled is False
+        assert query_run.llm_provider is None
+        assert query_run.llm_model is None
+        assert query_run.llm_input_tokens == 0
+        assert query_run.llm_output_tokens == 0
+        assert query_run.llm_cost_estimate == 0.0
+        assert query_run.error_type is None
+        assert query_run.error_message is None
+        assert query_run.verification_status == "skipped"
+        assert query_run.verification_reason == (
+            "No authorized context was found, so answer synthesis and verification were skipped."
+        )
+        assert query_run.response_payload["verification_status"] == "skipped"
+        assert query_run.response_payload["synthesis_enabled"] is False
+        assert query_run.response_payload["citations"] == []
+        assert query_run.response_payload["context"] == []
 
 
 def test_run_bm25_query_returns_cached_response(monkeypatch) -> None:

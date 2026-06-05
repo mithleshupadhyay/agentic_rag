@@ -177,7 +177,8 @@ def run_bm25_query(
             context_chunk.citation for context_chunk in context_response.context
         ]
         answer = (
-            "No relevant context was found for this query. Retrieved 0 context chunks."
+            "I could not find relevant authorized context for this query. "
+            "Try a more specific query or adjust filters if you expected matching documents."
         )
         synthesis_enabled = False
         synthesis_error = None
@@ -187,14 +188,18 @@ def run_bm25_query(
         llm_output_tokens = 0
         llm_cost_estimate = 0.0
         confidence_score = 0.0
-        verification_status = AnswerVerificationStatus.NOT_REQUIRED
-        verification_reason = "LLM synthesis was not requested."
+        verification_status = AnswerVerificationStatus.SKIPPED
+        verification_reason = (
+            "No authorized context was found, so answer synthesis and verification were skipped."
+        )
 
         if context_response.context:
             answer = (
                 "LLM synthesis is not enabled yet. "
                 f"Retrieved {len(context_response.context)} context chunks for this query."
             )
+            verification_status = AnswerVerificationStatus.NOT_REQUIRED
+            verification_reason = "LLM synthesis was not requested."
             top_candidate_score = 0.0
             for candidate in retrieval_response.candidates:
                 if candidate.score > top_candidate_score:
@@ -223,6 +228,12 @@ def run_bm25_query(
                     + (token_coverage * 0.05),
                 ),
                 2,
+            )
+        else:
+            logger.info(
+                f"[Query] BM25 query found no authorized context "
+                f"tenant={user_context.tenant_id} user={user_context.id} "
+                f"request_id={request_id} candidates={len(retrieval_response.candidates)}"
             )
 
         if settings.llm_synthesis_enabled and context_response.context:
