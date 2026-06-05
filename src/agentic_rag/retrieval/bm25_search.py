@@ -7,6 +7,11 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.monitoring.metrics import (
+    RETRIEVAL_LATENCY_SECONDS,
+    RETRIEVAL_LIFECYCLE_TOTAL,
+    RETRIEVAL_RESULT_TOTAL,
+)
 from agentic_rag.search.opensearch import OpenSearchClient
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.auth import Visibility
@@ -35,6 +40,7 @@ def search_bm25_chunks(
         f"user={user_context.id} limit={limit} min_score={settings.bm25_min_score}"
     )
     started_at = time.perf_counter()
+    retrieval_strategy = RetrievalStrategy.BM25.value
     query_text = query.strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="Retrieval query is required.")
@@ -49,10 +55,19 @@ def search_bm25_chunks(
                 f"[Retrieval] Workspace filter denied user_workspace={user_context.workspace_id} "
                 f"requested_workspace={filters.workspace_id}"
             )
+            latency_seconds = time.perf_counter() - started_at
+            RETRIEVAL_LIFECYCLE_TOTAL.labels(
+                status="workspace_denied",
+                retrieval_strategy=retrieval_strategy,
+            ).inc()
+            RETRIEVAL_LATENCY_SECONDS.labels(
+                status="workspace_denied",
+                retrieval_strategy=retrieval_strategy,
+            ).observe(latency_seconds)
             return RetrievalResponse(
                 strategy=RetrievalStrategy.BM25,
                 candidates=[],
-                latency_ms=int((time.perf_counter() - started_at) * 1000),
+                latency_ms=int(latency_seconds * 1000),
             )
 
     user_roles = user_context.roles or []
@@ -419,7 +434,37 @@ def search_bm25_chunks(
                 if candidate.score > candidates[existing_candidate_index].score:
                     candidates[existing_candidate_index] = candidate
 
-        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        latency_seconds = time.perf_counter() - started_at
+        latency_ms = int(latency_seconds * 1000)
+        RETRIEVAL_LIFECYCLE_TOTAL.labels(
+            status="completed",
+            retrieval_strategy=retrieval_strategy,
+        ).inc()
+        RETRIEVAL_LATENCY_SECONDS.labels(
+            status="completed",
+            retrieval_strategy=retrieval_strategy,
+        ).observe(latency_seconds)
+        if candidates:
+            RETRIEVAL_RESULT_TOTAL.labels(
+                retrieval_strategy=retrieval_strategy,
+                result="returned_candidate",
+            ).inc(len(candidates))
+        if skipped_low_score_count:
+            RETRIEVAL_RESULT_TOTAL.labels(
+                retrieval_strategy=retrieval_strategy,
+                result="skipped_low_score_hit",
+            ).inc(skipped_low_score_count)
+        if skipped_invalid_hit_count:
+            RETRIEVAL_RESULT_TOTAL.labels(
+                retrieval_strategy=retrieval_strategy,
+                result="skipped_invalid_hit",
+            ).inc(skipped_invalid_hit_count)
+        if deduplicated_hit_count:
+            RETRIEVAL_RESULT_TOTAL.labels(
+                retrieval_strategy=retrieval_strategy,
+                result="deduplicated_hit",
+            ).inc(deduplicated_hit_count)
+
         logger.info(
             f"[Retrieval] BM25 search completed tenant={user_context.tenant_id} "
             f"user={user_context.id} candidates={len(candidates)} "
@@ -433,6 +478,22 @@ def search_bm25_chunks(
             candidates=candidates,
             latency_ms=latency_ms,
         )
+
+    except Exception as e:
+        latency_seconds = time.perf_counter() - started_at
+        RETRIEVAL_LIFECYCLE_TOTAL.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy,
+        ).inc()
+        RETRIEVAL_LATENCY_SECONDS.labels(
+            status="failed",
+            retrieval_strategy=retrieval_strategy,
+        ).observe(latency_seconds)
+        logger.exception(
+            f"[Retrieval] BM25 search failed tenant={user_context.tenant_id} "
+            f"user={user_context.id} latency_ms={int(latency_seconds * 1000)}: {e}"
+        )
+        raise
 
     finally:
         if owns_client:

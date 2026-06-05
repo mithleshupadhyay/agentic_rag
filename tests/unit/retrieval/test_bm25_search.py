@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from prometheus_client import REGISTRY
 
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
@@ -508,6 +509,188 @@ def test_search_bm25_chunks_deduplicates_document_section_results() -> None:
     assert lower_score_chunk_id not in chunk_ids
     assert first_no_section_chunk_id in chunk_ids
     assert second_no_section_chunk_id in chunk_ids
+
+
+def test_search_bm25_chunks_records_retrieval_metrics(monkeypatch) -> None:
+    document_id = uuid4()
+    first_chunk_id = uuid4()
+    duplicate_chunk_id = uuid4()
+    low_score_document_id = uuid4()
+    low_score_chunk_id = uuid4()
+    lifecycle_labels = {
+        "status": "completed",
+        "retrieval_strategy": "bm25",
+    }
+    returned_candidate_labels = {
+        "retrieval_strategy": "bm25",
+        "result": "returned_candidate",
+    }
+    skipped_invalid_hit_labels = {
+        "retrieval_strategy": "bm25",
+        "result": "skipped_invalid_hit",
+    }
+    skipped_low_score_hit_labels = {
+        "retrieval_strategy": "bm25",
+        "result": "skipped_low_score_hit",
+    }
+    deduplicated_hit_labels = {
+        "retrieval_strategy": "bm25",
+        "result": "deduplicated_hit",
+    }
+    lifecycle_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_lifecycle_total",
+            lifecycle_labels,
+        )
+        or 0
+    )
+    latency_count_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_latency_seconds_count",
+            lifecycle_labels,
+        )
+        or 0
+    )
+    returned_candidate_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            returned_candidate_labels,
+        )
+        or 0
+    )
+    skipped_invalid_hit_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            skipped_invalid_hit_labels,
+        )
+        or 0
+    )
+    skipped_low_score_hit_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            skipped_low_score_hit_labels,
+        )
+        or 0
+    )
+    deduplicated_hit_before = (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            deduplicated_hit_labels,
+        )
+        or 0
+    )
+    search_client = FakeSearchClient(
+        hits=[
+            [],
+            {
+                "_score": 0.5,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(low_score_document_id),
+                    "chunk_id": str(low_score_chunk_id),
+                    "chunk_index": 1,
+                    "content": "Low score match.",
+                    "token_count": 3,
+                    "document_title": "Low Score",
+                    "source_uri": "upload://low-score.md",
+                },
+            },
+            {
+                "_score": 2.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(first_chunk_id),
+                    "chunk_index": 2,
+                    "content": "Best section match.",
+                    "token_count": 4,
+                    "section_path": "Security / Policy",
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+            {
+                "_score": 1.5,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(duplicate_chunk_id),
+                    "chunk_index": 3,
+                    "content": "Duplicate section match.",
+                    "token_count": 4,
+                    "section_path": "Security / Policy",
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    monkeypatch.setattr(
+        "agentic_rag.retrieval.bm25_search.settings.bm25_min_score",
+        1.0,
+    )
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    assert len(response.candidates) == 1
+    assert response.candidates[0].chunk_id == first_chunk_id
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_lifecycle_total",
+            lifecycle_labels,
+        )
+        == lifecycle_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_latency_seconds_count",
+            lifecycle_labels,
+        )
+        == latency_count_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            returned_candidate_labels,
+        )
+        == returned_candidate_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            skipped_invalid_hit_labels,
+        )
+        == skipped_invalid_hit_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            skipped_low_score_hit_labels,
+        )
+        == skipped_low_score_hit_before + 1
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "agentic_rag_retrieval_result_total",
+            deduplicated_hit_labels,
+        )
+        == deduplicated_hit_before + 1
+    )
 
 
 def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
