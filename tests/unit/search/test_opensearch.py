@@ -93,6 +93,8 @@ def test_build_chunk_search_document_includes_tenant_acl_and_content(db: Session
     assert payload["document_title"] == "Security Guide"
     assert payload["owner_user_id"] == "user-1"
     assert payload["file_name"] == "security.md"
+    assert payload["document_metadata"] == {"department": "security"}
+    assert payload["chunk_metadata"] == {"section": "overview"}
     assert payload["visibility"] == Visibility.GROUP
     assert payload["allowed_group_ids"] == ["security"]
     assert payload["allowed_roles"] == ["analyst"]
@@ -108,6 +110,10 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
         if request.method == "GET":
             return httpx.Response(404, request=request)
         if request.method == "PUT":
+            payload = json.loads(request.content.decode("utf-8"))
+            properties = payload["mappings"]["properties"]
+            assert properties["document_metadata"] == {"type": "object", "dynamic": True}
+            assert properties["chunk_metadata"] == {"type": "object", "dynamic": True}
             return httpx.Response(200, json={"acknowledged": True}, request=request)
         if request.method == "POST" and request.url.path == "/_bulk":
             body_lines = request.content.decode("utf-8").strip().splitlines()

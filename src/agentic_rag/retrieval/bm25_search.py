@@ -70,6 +70,55 @@ def search_bm25_chunks(
         )
     if filters.source_types:
         filter_clauses.append({"terms": {"source_type": filters.source_types}})
+    if filters.metadata:
+        for metadata_key, metadata_value in filters.metadata.items():
+            clean_metadata_key = metadata_key.strip()
+            if not clean_metadata_key or "." in clean_metadata_key:
+                logger.warning(
+                    f"[Retrieval] Invalid BM25 metadata filter key "
+                    f"tenant={user_context.tenant_id} key={metadata_key}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Metadata filter keys must be non-empty top-level field names.",
+                )
+
+            if isinstance(metadata_value, str):
+                metadata_filter_field_suffix = ".keyword"
+            elif (
+                isinstance(metadata_value, bool)
+                or isinstance(metadata_value, int)
+                or isinstance(metadata_value, float)
+            ):
+                metadata_filter_field_suffix = ""
+            else:
+                logger.warning(
+                    f"[Retrieval] Invalid BM25 metadata filter value "
+                    f"tenant={user_context.tenant_id} key={clean_metadata_key} "
+                    f"value_type={type(metadata_value).__name__}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Metadata filter values must be strings, numbers, or booleans.",
+                )
+
+            document_metadata_field = (
+                f"document_metadata.{clean_metadata_key}{metadata_filter_field_suffix}"
+            )
+            chunk_metadata_field = (
+                f"chunk_metadata.{clean_metadata_key}{metadata_filter_field_suffix}"
+            )
+            filter_clauses.append(
+                {
+                    "bool": {
+                        "should": [
+                            {"term": {document_metadata_field: metadata_value}},
+                            {"term": {chunk_metadata_field: metadata_value}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            )
 
     must_not_clauses: list[dict] = [
         {"term": {"denied_user_ids": user_context.id}},

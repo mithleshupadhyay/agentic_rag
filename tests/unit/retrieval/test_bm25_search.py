@@ -1,12 +1,15 @@
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.shared.schemas.retrieval import (
     RetrievalFilters,
     RetrievalStrategy,
     RetrievalTool,
 )
-from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 
 
 class FakeSearchClient:
@@ -103,6 +106,81 @@ def test_search_bm25_chunks_builds_tenant_acl_filters_and_candidates() -> None:
     assert {"terms": {"allowed_roles": ["analyst"]}} in acl_should
     assert {"terms": {"visibility": ["public", "tenant"]}} in acl_should
     assert search_body["size"] == 5
+
+
+def test_search_bm25_chunks_adds_exact_metadata_filters() -> None:
+    search_client = FakeSearchClient()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        filters=RetrievalFilters(
+            metadata={
+                "department": "security",
+                "published": True,
+                "priority": 3,
+            }
+        ),
+        search_client=search_client,
+    )
+
+    filter_clauses = search_client.search_body["query"]["bool"]["filter"]
+
+    assert {
+        "bool": {
+            "should": [
+                {"term": {"document_metadata.department.keyword": "security"}},
+                {"term": {"chunk_metadata.department.keyword": "security"}},
+            ],
+            "minimum_should_match": 1,
+        }
+    } in filter_clauses
+    assert {
+        "bool": {
+            "should": [
+                {"term": {"document_metadata.published": True}},
+                {"term": {"chunk_metadata.published": True}},
+            ],
+            "minimum_should_match": 1,
+        }
+    } in filter_clauses
+    assert {
+        "bool": {
+            "should": [
+                {"term": {"document_metadata.priority": 3}},
+                {"term": {"chunk_metadata.priority": 3}},
+            ],
+            "minimum_should_match": 1,
+        }
+    } in filter_clauses
+
+
+def test_search_bm25_chunks_rejects_nested_metadata_filter_key() -> None:
+    search_client = FakeSearchClient()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        search_bm25_chunks(
+            user_context=user_context,
+            query="security policy",
+            filters=RetrievalFilters(metadata={"security.department": "security"}),
+            search_client=search_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert search_client.search_body is None
 
 
 def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
