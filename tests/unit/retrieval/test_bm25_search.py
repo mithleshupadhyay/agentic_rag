@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 import pytest
@@ -285,6 +286,71 @@ def test_search_bm25_chunks_rejects_invalid_date_range_value() -> None:
     assert search_client.search_body is None
 
 
+def test_search_bm25_chunks_skips_invalid_hits_and_keeps_valid_hit(caplog) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    search_client = FakeSearchClient(
+        hits=[
+            [],
+            {
+                "_score": 2.5,
+                "_source": None,
+            },
+            {
+                "_score": "bad-score",
+                "_source": {
+                    "document_id": str(uuid4()),
+                    "chunk_id": str(uuid4()),
+                    "content": "Invalid score content.",
+                },
+            },
+            {
+                "_score": 2.5,
+                "_source": {
+                    "document_id": "not-a-uuid",
+                    "chunk_id": str(uuid4()),
+                    "content": "Invalid id content.",
+                },
+            },
+            {
+                "_score": 2.5,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(chunk_id),
+                    "chunk_index": 1,
+                    "content": "Valid fallback content.",
+                    "token_count": 4,
+                    "document_title": "Valid Result",
+                    "source_uri": "upload://valid.md",
+                },
+            },
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    caplog.set_level(logging.WARNING, logger="agentic_rag.retrieval.bm25_search")
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    assert len(response.candidates) == 1
+    assert response.candidates[0].document_id == document_id
+    assert response.candidates[0].chunk_id == chunk_id
+    assert response.candidates[0].content == "Valid fallback content."
+    assert "Skipping invalid BM25 hit" in caplog.text
+
+
 def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
     high_score_document_id = uuid4()
     high_score_chunk_id = uuid4()
@@ -389,6 +455,8 @@ def test_search_bm25_chunks_keeps_zero_score_candidates_by_default(monkeypatch) 
 
     assert len(response.candidates) == 1
     assert response.candidates[0].chunk_id == chunk_id
+    assert response.candidates[0].content == "Default threshold keeps this result."
+    assert response.candidates[0].citation.quote == "Default threshold keeps this result."
     assert response.candidates[0].score == 0.0
 
 

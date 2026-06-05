@@ -66,7 +66,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, persists replay metadata summaries through agent-run CRUD, exposes runtime streaming events for step progress and answer tokens, and supplies terminal response data to the query stream API. | Add replay API contracts only when a user-facing or operator-facing replay endpoint is selected. | High |
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, context building, deterministic answer confidence scoring, optional LLM synthesis, safe LLM failure fallback without caching failed synthesis responses, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add no-result response behavior hardening and cache metadata when production behavior needs it. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
-| `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search with exact document/chunk metadata filters, indexed timestamp range filters, and configurable minimum score filtering before candidates reach context building or LLM synthesis. | Add better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
+| `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search with exact document/chunk metadata filters, indexed timestamp range filters, invalid-hit skipping, and configurable minimum score filtering before candidates reach context building or LLM synthesis. | Add better highlighting, result deduplication by document/section, and observability for recall/latency. | High |
 | `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
 | `src/agentic_rag/retrieval/hybrid_search.py` | Service-level hybrid retrieval that calls BM25 and vector retrieval, deduplicates by chunk ID, combines candidates with rank-based scoring, and reranks the merged candidates. | Add source/date/metadata filter support and hybrid retrieval quality tests. | High |
 | `src/agentic_rag/retrieval/reranker.py` | Deterministic provider-neutral reranker that scores authorized candidates against the query and preserves original retrieval score/source metadata. | Add model-backed reranker integration and latency/quality metrics. | High |
@@ -104,7 +104,7 @@ retrieval quality, and production operations.
 | `tests/unit/agent/test_graph.py` | Agent graph tests for LangGraph node progression, guardrail stop behavior, checkpoint output, persistence-backed graph execution, persisted replay metadata, persisted cancellation stops, authorized BM25/context building, LLM generation, grounding verification, and runtime streaming events. | Add replay endpoint tests when an API contract is selected. | High |
 | `tests/unit/query/test_answer_verifier.py` | Deterministic answer verifier tests for valid citations, missing citations, unknown citations, and no-context behavior. | Add quote-level grounding and confidence scoring tests when verifier logic becomes richer. | High |
 | `tests/unit/query/test_bm25_query.py` | BM25 query orchestration tests, including persisted completed/failed query runs, Redis cache hit/miss/fallback behavior, metric accounting, and answer-verification fallback. | Add synthesis handoff edge cases and no-result response behavior tests. | High |
-| `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests, including tenant/ACL filters, workspace mismatch, admin access, score-threshold filtering, exact metadata filters, and indexed timestamp range filters. | Add no-highlight fallback, invalid hit handling, and result deduplication tests. | High |
+| `tests/unit/retrieval/test_bm25_search.py` | BM25 retrieval service tests, including tenant/ACL filters, workspace mismatch, admin access, score-threshold filtering, exact metadata filters, indexed timestamp range filters, no-highlight fallback, and invalid-hit handling. | Add result deduplication tests and richer highlighting edge cases. | High |
 | `tests/unit/retrieval/test_vector_search.py` | Provider-neutral vector retrieval service tests with mocked embedding and pgvector search calls. | Add Docker-backed pgvector smoke tests and richer filter coverage when vector filtering expands. | High |
 | `tests/unit/retrieval/test_hybrid_search.py` | Hybrid retrieval service tests with mocked BM25, vector retrieval, and reranker handoff. | Add quality-scoring edge cases when hybrid retrieval expands. | High |
 | `tests/unit/retrieval/test_reranker.py` | Reranker service tests for empty input, query-match ranking, top-k truncation, metadata/citation scoring, validation, and mutation safety. | Add model-backed reranker tests and hybrid handoff coverage when reranker integration expands. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-05 | Added BM25 invalid-hit skipping and no-highlight fallback coverage. |
 | 2026-06-05 | Added BM25 date range filtering for indexed chunk timestamps. |
 | 2026-06-05 | Added exact BM25 metadata filter handling across document and chunk metadata. |
 | 2026-06-04 | Added configurable BM25 minimum score filtering before retrieval candidates reach context building or LLM synthesis. |
@@ -160,7 +161,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add BM25 no-highlight fallback coverage and invalid-hit handling. |
+| 1 | Add BM25 result deduplication by document and section. |
 
 ## Lowest Priority Final Polish
 

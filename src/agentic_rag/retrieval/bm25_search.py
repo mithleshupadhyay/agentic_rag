@@ -295,54 +295,113 @@ def search_bm25_chunks(
         hits = search_client.search_chunks_bm25(search_body)
         candidates = []
         skipped_low_score_count = 0
+        skipped_invalid_hit_count = 0
         for hit in hits:
-            source = hit.get("_source", {})
-            highlight = hit.get("highlight", {})
+            if not isinstance(hit, dict):
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} reason=hit_not_object"
+                )
+                continue
+
+            source = hit.get("_source")
+            if not isinstance(source, dict):
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} reason=source_not_object"
+                )
+                continue
+
+            highlight = hit.get("highlight") or {}
+            if not isinstance(highlight, dict):
+                highlight = {}
             highlighted_content = highlight.get("content") or []
+            if not isinstance(highlighted_content, list):
+                highlighted_content = []
             quote = highlighted_content[0] if highlighted_content else source.get("content")
-            score = float(hit.get("_score") or 0.0)
+            if not isinstance(quote, str) or not quote.strip():
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} reason=missing_content"
+                )
+                continue
+
+            try:
+                score = float(hit.get("_score") or 0.0)
+            except (TypeError, ValueError):
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} reason=invalid_score"
+                )
+                continue
+
             if score < settings.bm25_min_score:
                 skipped_low_score_count += 1
                 continue
 
-            document_id = UUID(source["document_id"])
-            chunk_id = UUID(source["chunk_id"])
-
-            candidates.append(
-                CandidateChunk(
-                    chunk_id=chunk_id,
-                    document_id=document_id,
-                    content=quote,
-                    score=score,
-                    source=RetrievalTool.BM25_SEARCH,
-                    metadata={
-                        "workspace_id": source.get("workspace_id"),
-                        "chunk_index": source.get("chunk_index"),
-                        "token_count": source.get("token_count"),
-                        "start_offset": source.get("start_offset"),
-                        "end_offset": source.get("end_offset"),
-                        "file_name": source.get("file_name"),
-                        "source_type": source.get("source_type"),
-                        "classification_level": source.get("classification_level"),
-                    },
-                    citation=Citation(
-                        document_id=document_id,
-                        chunk_id=chunk_id,
-                        title=source.get("document_title"),
-                        source_uri=source.get("source_uri"),
-                        page_number=source.get("page_number"),
-                        section_path=source.get("section_path"),
-                        quote=quote,
-                        score=score,
-                    ),
+            source_document_id = source.get("document_id")
+            source_chunk_id = source.get("chunk_id")
+            try:
+                document_id = UUID(str(source_document_id))
+                chunk_id = UUID(str(source_chunk_id))
+            except (TypeError, ValueError):
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} document_id={source_document_id} "
+                    f"chunk_id={source_chunk_id} reason=invalid_ids"
                 )
-            )
+                continue
+
+            try:
+                candidates.append(
+                    CandidateChunk(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        content=quote,
+                        score=score,
+                        source=RetrievalTool.BM25_SEARCH,
+                        metadata={
+                            "workspace_id": source.get("workspace_id"),
+                            "chunk_index": source.get("chunk_index"),
+                            "token_count": source.get("token_count"),
+                            "start_offset": source.get("start_offset"),
+                            "end_offset": source.get("end_offset"),
+                            "file_name": source.get("file_name"),
+                            "source_type": source.get("source_type"),
+                            "classification_level": source.get("classification_level"),
+                        },
+                        citation=Citation(
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            title=source.get("document_title"),
+                            source_uri=source.get("source_uri"),
+                            page_number=source.get("page_number"),
+                            section_path=source.get("section_path"),
+                            quote=quote,
+                            score=score,
+                        ),
+                    )
+                )
+            except (TypeError, ValueError) as e:
+                skipped_invalid_hit_count += 1
+                logger.warning(
+                    f"[Retrieval] Skipping invalid BM25 hit tenant={user_context.tenant_id} "
+                    f"user={user_context.id} document_id={source_document_id} "
+                    f"chunk_id={source_chunk_id} reason=candidate_validation_failed error={e}"
+                )
+                continue
 
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
             f"[Retrieval] BM25 search completed tenant={user_context.tenant_id} "
             f"user={user_context.id} candidates={len(candidates)} "
             f"skipped_low_score={skipped_low_score_count} "
+            f"skipped_invalid_hits={skipped_invalid_hit_count} "
             f"min_score={settings.bm25_min_score} latency_ms={latency_ms}"
         )
         return RetrievalResponse(
