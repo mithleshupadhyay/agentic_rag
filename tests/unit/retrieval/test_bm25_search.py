@@ -351,6 +351,99 @@ def test_search_bm25_chunks_skips_invalid_hits_and_keeps_valid_hit(caplog) -> No
     assert "Skipping invalid BM25 hit" in caplog.text
 
 
+def test_search_bm25_chunks_deduplicates_document_section_results() -> None:
+    document_id = uuid4()
+    lower_score_chunk_id = uuid4()
+    higher_score_chunk_id = uuid4()
+    first_no_section_chunk_id = uuid4()
+    second_no_section_chunk_id = uuid4()
+    search_client = FakeSearchClient(
+        hits=[
+            {
+                "_score": 1.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(lower_score_chunk_id),
+                    "chunk_index": 1,
+                    "content": "Lower score duplicate section.",
+                    "token_count": 4,
+                    "section_path": "Security / Policy",
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+            {
+                "_score": 4.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(higher_score_chunk_id),
+                    "chunk_index": 2,
+                    "content": "Higher score duplicate section.",
+                    "token_count": 5,
+                    "section_path": "Security / Policy",
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+            {
+                "_score": 2.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(first_no_section_chunk_id),
+                    "chunk_index": 3,
+                    "content": "First chunk without section.",
+                    "token_count": 4,
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+            {
+                "_score": 1.5,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(document_id),
+                    "chunk_id": str(second_no_section_chunk_id),
+                    "chunk_index": 4,
+                    "content": "Second chunk without section.",
+                    "token_count": 4,
+                    "document_title": "Security Policy",
+                    "source_uri": "upload://security.md",
+                },
+            },
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    chunk_ids = [candidate.chunk_id for candidate in response.candidates]
+
+    assert len(response.candidates) == 3
+    assert response.candidates[0].chunk_id == higher_score_chunk_id
+    assert response.candidates[0].score == 4.0
+    assert response.candidates[0].content == "Higher score duplicate section."
+    assert lower_score_chunk_id not in chunk_ids
+    assert first_no_section_chunk_id in chunk_ids
+    assert second_no_section_chunk_id in chunk_ids
+
+
 def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
     high_score_document_id = uuid4()
     high_score_chunk_id = uuid4()

@@ -293,9 +293,11 @@ def search_bm25_chunks(
 
     try:
         hits = search_client.search_chunks_bm25(search_body)
-        candidates = []
+        candidates: list[CandidateChunk] = []
         skipped_low_score_count = 0
         skipped_invalid_hit_count = 0
+        deduplicated_hit_count = 0
+        dedupe_positions: dict[str, int] = {}
         for hit in hits:
             if not isinstance(hit, dict):
                 skipped_invalid_hit_count += 1
@@ -345,6 +347,7 @@ def search_bm25_chunks(
 
             source_document_id = source.get("document_id")
             source_chunk_id = source.get("chunk_id")
+            source_section_path = source.get("section_path")
             try:
                 document_id = UUID(str(source_document_id))
                 chunk_id = UUID(str(source_chunk_id))
@@ -358,34 +361,32 @@ def search_bm25_chunks(
                 continue
 
             try:
-                candidates.append(
-                    CandidateChunk(
-                        chunk_id=chunk_id,
+                candidate = CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content=quote,
+                    score=score,
+                    source=RetrievalTool.BM25_SEARCH,
+                    metadata={
+                        "workspace_id": source.get("workspace_id"),
+                        "chunk_index": source.get("chunk_index"),
+                        "token_count": source.get("token_count"),
+                        "start_offset": source.get("start_offset"),
+                        "end_offset": source.get("end_offset"),
+                        "file_name": source.get("file_name"),
+                        "source_type": source.get("source_type"),
+                        "classification_level": source.get("classification_level"),
+                    },
+                    citation=Citation(
                         document_id=document_id,
-                        content=quote,
+                        chunk_id=chunk_id,
+                        title=source.get("document_title"),
+                        source_uri=source.get("source_uri"),
+                        page_number=source.get("page_number"),
+                        section_path=source_section_path,
+                        quote=quote,
                         score=score,
-                        source=RetrievalTool.BM25_SEARCH,
-                        metadata={
-                            "workspace_id": source.get("workspace_id"),
-                            "chunk_index": source.get("chunk_index"),
-                            "token_count": source.get("token_count"),
-                            "start_offset": source.get("start_offset"),
-                            "end_offset": source.get("end_offset"),
-                            "file_name": source.get("file_name"),
-                            "source_type": source.get("source_type"),
-                            "classification_level": source.get("classification_level"),
-                        },
-                        citation=Citation(
-                            document_id=document_id,
-                            chunk_id=chunk_id,
-                            title=source.get("document_title"),
-                            source_uri=source.get("source_uri"),
-                            page_number=source.get("page_number"),
-                            section_path=source.get("section_path"),
-                            quote=quote,
-                            score=score,
-                        ),
-                    )
+                    ),
                 )
             except (TypeError, ValueError) as e:
                 skipped_invalid_hit_count += 1
@@ -396,12 +397,27 @@ def search_bm25_chunks(
                 )
                 continue
 
+            if isinstance(source_section_path, str) and source_section_path.strip():
+                dedupe_key = f"{document_id}:section:{source_section_path.strip()}"
+            else:
+                dedupe_key = f"{document_id}:chunk:{chunk_id}"
+
+            existing_candidate_index = dedupe_positions.get(dedupe_key)
+            if existing_candidate_index is None:
+                dedupe_positions[dedupe_key] = len(candidates)
+                candidates.append(candidate)
+            else:
+                deduplicated_hit_count += 1
+                if candidate.score > candidates[existing_candidate_index].score:
+                    candidates[existing_candidate_index] = candidate
+
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
             f"[Retrieval] BM25 search completed tenant={user_context.tenant_id} "
             f"user={user_context.id} candidates={len(candidates)} "
             f"skipped_low_score={skipped_low_score_count} "
             f"skipped_invalid_hits={skipped_invalid_hit_count} "
+            f"deduplicated_hits={deduplicated_hit_count} "
             f"min_score={settings.bm25_min_score} latency_ms={latency_ms}"
         )
         return RetrievalResponse(
