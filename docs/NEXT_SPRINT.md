@@ -59,7 +59,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/kafka/events.py` | Kafka event schemas for document parse, metadata, chunking, embedding, indexing, ingestion retry, ingestion DLQ, and common event envelopes. | Add audit events, queue publisher integration tests, and schema compatibility/versioning checks. | High |
 | `src/agentic_rag/shared/kafka/producer.py` | Fakeable Kafka event publisher adapter that serializes `EventEnvelope`, applies an idempotency message key, and can create a concrete `kafka-python` producer for runtime publishing against the local Kafka stack. | Add delivery callbacks, retry policy, producer metrics, and broader local Kafka integration tests. | High |
 | `src/agentic_rag/shared/kafka/consumer.py` | Fakeable Kafka event consumer adapter that validates `EventEnvelope` messages, commits valid messages after handler success, and skips invalid poison messages after logging validation failures. | Add delivery metrics, retry policy hooks, and broader local Kafka integration coverage. | High |
-| `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client with queryable document and chunk metadata mapping for exact filters, controlled BM25 retry behavior for transient search failures, and clear failure errors for exhausted or invalid search responses. | Add search templates, index aliases, index version rollover, shard/replica tuning, circuit breaker handling, and integration tests against local OpenSearch. | High |
+| `src/agentic_rag/search/opensearch.py` | OpenSearch indexing and BM25 search client with queryable document and chunk metadata mapping for exact filters, controlled BM25 retry behavior for transient search failures, clear failure errors for exhausted or invalid search responses, and safe item-level bulk failure summaries. | Add search templates, index aliases, index version rollover, shard/replica tuning, circuit breaker handling, and integration tests against local OpenSearch. | High |
 | `src/agentic_rag/llm/gateway.py` | LiteLLM-backed chat, token streaming, and embedding gateway with budget checks, transient provider retries, Redis-capable circuit breaker protection, stream completion events, and embedding dimension validation. | Add model routing, prompt policy, provider-specific integration tests, stream cancellation/backpressure handling, and token/cost accounting hardening. | High |
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add richer retry metadata and replay support when graph replay is selected. | High |
@@ -98,7 +98,7 @@ retrieval quality, and production operations.
 | `tests/unit/shared/db/test_agent_runs_crud.py` | Agent run persistence tests for create run, cancel run, check cancelled status, record step, save checkpoint, fetch run, tenant boundaries, rollback behavior, and terminal guardrail status updates. | Add lifecycle transition tests when API and worker ownership are introduced. | High |
 | `tests/unit/shared/db/test_models.py` | Model tests. | Add index/constraint coverage, relationship loading tests, JSON field tests, and model defaults for ingestion/chunk/ACL tables. | Medium |
 | `tests/unit/shared/test_schemas.py` | Schema tests. | Add stricter validation tests for query, retrieval, agent, ingestion, and LLM gateway schemas. | Medium |
-| `tests/unit/search/test_opensearch.py` | OpenSearch client tests, including BM25 search retry and exhausted failure behavior. | Add partial bulk failure handling, alias rollover tests, and query payload coverage for all retrieval filters. | Medium |
+| `tests/unit/search/test_opensearch.py` | OpenSearch client tests, including BM25 search retry, exhausted failure behavior, and safe bulk index item failure summaries. | Add alias rollover tests and query payload coverage for all retrieval filters. | Medium |
 | `tests/unit/llm/test_gateway.py` | LLM gateway unit tests, including LiteLLM call mapping, token streaming events, request budget rejection, retry behavior, and circuit breaker behavior. | Add provider-specific mocked cases, timeout tests, Redis-backed circuit tests, stream failure edge cases, and no-secret logging tests. | High |
 | `tests/unit/agent/test_runtime.py` | Agent runtime guardrail tests for state initialization, step and tool limits, timeout behavior, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add persistence-backed checkpoint and cancellation tests when those runtime layers are implemented. | High |
 | `tests/unit/agent/test_graph.py` | Agent graph tests for LangGraph node progression, guardrail stop behavior, checkpoint output, persistence-backed graph execution, persisted replay metadata, persisted cancellation stops, authorized BM25/context building, LLM generation, grounding verification, and runtime streaming events. | Add replay endpoint tests when an API contract is selected. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-05 | Added safe OpenSearch bulk indexing item failure summaries. |
 | 2026-06-05 | Added OpenSearch BM25 retry settings and controlled search failure handling. |
 | 2026-06-05 | Added BM25 retrieval dashboard panels and Prometheus alert rules. |
 | 2026-06-05 | Added BM25 retrieval metrics for lifecycle, latency, returned candidates, skipped hits, and deduplicated hits. |
@@ -166,7 +167,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add OpenSearch bulk indexing partial failure details. |
+| 1 | Add OpenSearch index alias support for chunk indexing and BM25 search. |
 
 ## Lowest Priority Final Polish
 

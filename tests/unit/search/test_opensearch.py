@@ -138,6 +138,53 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
     assert [request.method for request in requests] == ["GET", "PUT", "POST"]
 
 
+def test_opensearch_client_reports_bulk_index_item_failures(db: Session) -> None:
+    chunk = add_chunk(db)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/_bulk":
+            return httpx.Response(
+                200,
+                json={
+                    "errors": True,
+                    "items": [
+                        {
+                            "index": {
+                                "_index": "chunks-test",
+                                "_id": str(chunk.id),
+                                "status": 400,
+                                "error": {
+                                    "type": "mapper_parsing_exception",
+                                    "reason": "raw private chunk content should not leak",
+                                },
+                            }
+                        }
+                    ],
+                },
+                request=request,
+            )
+        return httpx.Response(500, request=request)
+
+    client = OpenSearchClient(
+        base_url="http://opensearch:9200",
+        username="",
+        password="",
+        index_name="chunks-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.bulk_index_chunks([chunk])
+
+    client.close()
+
+    error_message = str(exc_info.value)
+    assert "failed_count=1" in error_message
+    assert "statuses=400:1" in error_message
+    assert "error_types=mapper_parsing_exception:1" in error_message
+    assert "raw private chunk content" not in error_message
+
+
 def test_opensearch_client_searches_bm25_chunks() -> None:
     requests: list[httpx.Request] = []
 

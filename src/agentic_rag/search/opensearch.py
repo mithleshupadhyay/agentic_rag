@@ -175,8 +175,63 @@ class OpenSearchClient:
         response.raise_for_status()
         response_data = response.json()
         if response_data.get("errors"):
-            logger.error(f"[OpenSearch] Bulk index returned errors: {response_data}")
-            raise RuntimeError("OpenSearch bulk indexing failed for one or more chunks")
+            # Summarize item failures without logging document content.
+            failed_count = 0
+            status_counts: dict[str, int] = {}
+            error_type_counts: dict[str, int] = {}
+            items = response_data.get("items", [])
+
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+
+                    action_result = None
+                    for item_value in item.values():
+                        if isinstance(item_value, dict):
+                            action_result = item_value
+                            break
+
+                    if not action_result:
+                        continue
+
+                    status = action_result.get("status")
+                    error = action_result.get("error")
+                    if not error and (not isinstance(status, int) or status < 400):
+                        continue
+
+                    failed_count += 1
+                    status_key = str(status) if status is not None else "unknown"
+                    status_counts[status_key] = status_counts.get(status_key, 0) + 1
+
+                    error_type = "unknown"
+                    if isinstance(error, dict) and error.get("type"):
+                        error_type = str(error["type"])
+                    elif isinstance(error, str) and error:
+                        error_type = "string_error"
+                    error_type_counts[error_type] = error_type_counts.get(error_type, 0) + 1
+
+            if failed_count == 0:
+                failed_count = 1
+                status_counts["unknown"] = 1
+                error_type_counts["unknown"] = 1
+
+            status_summary = ", ".join(
+                f"{status}:{count}" for status, count in sorted(status_counts.items())
+            )
+            error_type_summary = ", ".join(
+                f"{error_type}:{count}" for error_type, count in sorted(error_type_counts.items())
+            )
+            logger.error(
+                f"[OpenSearch] Bulk index failed index={index_name} chunks={len(chunks)} "
+                f"failed={failed_count} statuses={status_summary} "
+                f"error_types={error_type_summary}"
+            )
+            raise RuntimeError(
+                "OpenSearch bulk indexing failed "
+                f"failed_count={failed_count} statuses={status_summary} "
+                f"error_types={error_type_summary}"
+            )
 
         logger.info(f"[OpenSearch] Bulk indexed {len(chunks)} chunks index={index_name}")
         return len(chunks)
