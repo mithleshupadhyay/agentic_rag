@@ -23,6 +23,8 @@ from agentic_rag.shared.db.crud.query_runs import (
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
 from agentic_rag.shared.schemas.query import (
     AnswerVerificationStatus,
+    QueryCacheLookupStatus,
+    QueryCacheWriteStatus,
     QueryRequest,
     QueryResponse,
 )
@@ -78,7 +80,11 @@ def run_bm25_query(
     try:
         redis_client = None
         query_cache_key = None
+        cache_lookup_status = QueryCacheLookupStatus.DISABLED
+        cache_write_status = QueryCacheWriteStatus.DISABLED
         if settings.query_cache_enabled:
+            cache_lookup_status = QueryCacheLookupStatus.MISS
+            cache_write_status = QueryCacheWriteStatus.NOT_ATTEMPTED
             try:
                 # Build an authorization-scoped cache key.
                 query_cache_payload = {
@@ -129,6 +135,13 @@ def run_bm25_query(
                         0,
                         int((time.perf_counter() - started_at) * 1000),
                     )
+                    cached_data["cache_lookup_status"] = (
+                        QueryCacheLookupStatus.HIT.value
+                    )
+                    cached_data["cache_write_status"] = (
+                        QueryCacheWriteStatus.NOT_ATTEMPTED.value
+                    )
+                    cached_data["cache_ttl_seconds"] = None
                     response = QueryResponse.model_validate(cached_data)
                     if db is not None and query_run is not None:
                         mark_query_run_completed(
@@ -154,6 +167,8 @@ def run_bm25_query(
                     f"user={user_context.id} request_id={request_id} "
                     f"error_type={type(e).__name__}"
                 )
+                cache_lookup_status = QueryCacheLookupStatus.SKIPPED
+                cache_write_status = QueryCacheWriteStatus.SKIPPED
                 redis_client = None
                 query_cache_key = None
 
@@ -376,15 +391,15 @@ def run_bm25_query(
             synthesis_error=synthesis_error,
             verification_status=verification_status,
             verification_reason=verification_reason,
+            cache_lookup_status=cache_lookup_status,
+            cache_write_status=cache_write_status,
+            cache_ttl_seconds=None,
         )
-        if db is not None and query_run is not None:
-            mark_query_run_completed(
-                db=db,
-                query_run=query_run,
-                response=response,
-            )
+
         if settings.query_cache_enabled and redis_client is not None and query_cache_key:
             if synthesis_error:
+                response.cache_write_status = QueryCacheWriteStatus.SKIPPED
+                response.cache_ttl_seconds = None
                 logger.info(
                     f"[Query] BM25 query cache write skipped "
                     f"tenant={user_context.tenant_id} user={user_context.id} "
@@ -393,6 +408,8 @@ def run_bm25_query(
             else:
                 try:
                     # Store only a successful response payload.
+                    response.cache_write_status = QueryCacheWriteStatus.WRITTEN
+                    response.cache_ttl_seconds = settings.query_cache_ttl_seconds
                     redis_client.setex(
                         query_cache_key,
                         settings.query_cache_ttl_seconds,
@@ -408,11 +425,20 @@ def run_bm25_query(
                         f"ttl_seconds={settings.query_cache_ttl_seconds}"
                     )
                 except (RedisError, TypeError, ValueError) as e:
+                    response.cache_write_status = QueryCacheWriteStatus.FAILED
+                    response.cache_ttl_seconds = None
                     logger.warning(
                         f"[Query] BM25 query cache write skipped "
                         f"tenant={user_context.tenant_id} user={user_context.id} "
                         f"request_id={request_id} error_type={type(e).__name__}"
                     )
+
+        if db is not None and query_run is not None:
+            mark_query_run_completed(
+                db=db,
+                query_run=query_run,
+                response=response,
+            )
         return response
 
     except Exception as e:

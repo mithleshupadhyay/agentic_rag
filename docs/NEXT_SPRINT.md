@@ -64,7 +64,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/llm/circuit_breaker.py` | LLM provider/model circuit breaker with in-memory local state, optional Redis-backed shared state for multi-replica deployments, half-open transition handling, memory fallback if Redis is unavailable, safe provider health snapshots, and Prometheus circuit metrics. | Add provider routing integration, stronger Redis-backed race-condition coverage, and provider health dashboard panels. | High |
 | `src/agentic_rag/agent/runtime.py` | Local agent runtime skeleton for state initialization, max step/tool guardrails, deadline and step timeout checks, repeated tool-call detection, checkpoint payloads, generation context gating, and safe fallback state. | Add richer retry metadata and replay support when graph replay is selected. | High |
 | `src/agentic_rag/agent/graph.py` | LangGraph-based runtime graph that runs deterministic planning nodes, checks persisted cancellation before each node, runs tenant/ACL-filtered BM25 retrieval, builds authorized context/citations, calls the LLM gateway after context guardrails pass, verifies grounding, records runtime checkpoints, persists replay metadata summaries through agent-run CRUD, exposes runtime streaming events for step progress and answer tokens, and supplies terminal response data to the query stream API. | Add replay API contracts only when a user-facing or operator-facing replay endpoint is selected. | High |
-| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, context building, deterministic no-result handling, deterministic answer confidence scoring, optional LLM synthesis, safe LLM failure fallback without caching failed synthesis responses, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add cache metadata when production behavior needs it. | High |
+| `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, cache response metadata, context building, deterministic no-result handling, deterministic answer confidence scoring, optional LLM synthesis, safe LLM failure fallback without caching failed synthesis responses, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add synthesis handoff edge cases as behavior expands. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search with exact document/chunk metadata filters, indexed timestamp range filters, invalid-hit skipping, result deduplication by document/section, highlight fallback hardening, configurable minimum score filtering, and low-cardinality retrieval metric recording before candidates reach context building or LLM synthesis. | Add OpenSearch failure handling and retry behavior when the search client policy is selected. | High |
 | `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
@@ -81,7 +81,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/schemas/chunks.py` | Chunk API and internal schemas. | Add chunk create/read/search schemas, chunk ACL summaries, citation fields, token window metadata, and embedding status fields. | High |
 | `src/agentic_rag/shared/schemas/ingestion.py` | Ingestion schemas. | Add upload ingestion request, connector ingestion request, job progress response, retry response, and batch ingestion status response. | High |
 | `src/agentic_rag/shared/schemas/retrieval.py` | Retrieval schemas. | Add metadata search, BM25 search, vector search, hybrid merge, reranker, citation, and ACL-filtered candidate schemas. | High |
-| `src/agentic_rag/shared/schemas/query.py` | Query API schemas with request/response, query-run read/list, and stream event contracts. | Add grounded answer response, citation response, cache metadata, budget/timeout fields, and stricter typed stream event variants. | High |
+| `src/agentic_rag/shared/schemas/query.py` | Query API schemas with request/response, query cache metadata, query-run read/list, and stream event contracts. | Add grounded answer response, citation response, budget/timeout fields, and stricter typed stream event variants. | High |
 | `src/agentic_rag/shared/schemas/agent.py` | Agent runtime schemas for limits, state, step records, tool call records, checkpoint metadata, statuses, loop detection fields, and runtime streaming events. | Add persisted run lifecycle request/response schemas, transition validation fields, cancellation metadata, and API-facing stream event mapping when the runtime is wired into APIs. | High |
 | `src/agentic_rag/shared/schemas/llm.py` | LLM gateway schemas for chat completion, model metadata, embeddings, and budget decisions. | Add model routing, token budget, retry policy, prompt policy, and response safety metadata. | High |
 | `src/agentic_rag/shared/schemas/evaluation.py` | Evaluation schemas. | Add retrieval evaluation, answer faithfulness, citation accuracy, latency, cost, and regression test result schemas. | Medium |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-05 | Added BM25 query cache lookup and write metadata to query responses and persisted response payloads. |
 | 2026-06-05 | Hardened no-result BM25 query responses with skipped verification metadata. |
 | 2026-06-05 | Added OpenSearch chunk read/write alias support for indexing and BM25 search. |
 | 2026-06-05 | Added safe OpenSearch bulk indexing item failure summaries. |
@@ -169,7 +170,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add query cache metadata to BM25 query responses. |
+| 1 | Add source, date, and metadata filters to vector retrieval. |
 
 ## Lowest Priority Final Polish
 

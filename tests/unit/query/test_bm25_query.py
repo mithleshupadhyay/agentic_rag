@@ -13,7 +13,12 @@ from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.models import QueryRun, Tenant
 from agentic_rag.shared.schemas.common import Citation
 from agentic_rag.shared.schemas.llm import LLMResponse
-from agentic_rag.shared.schemas.query import AnswerVerificationStatus, QueryRequest
+from agentic_rag.shared.schemas.query import (
+    AnswerVerificationStatus,
+    QueryCacheLookupStatus,
+    QueryCacheWriteStatus,
+    QueryRequest,
+)
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
     RetrievalResponse,
@@ -110,6 +115,9 @@ def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
     assert response.citations[0].title == "Security Policy"
     assert response.context_token_count == 4
     assert "LLM synthesis is not enabled yet" in response.answer
+    assert response.cache_lookup_status == QueryCacheLookupStatus.DISABLED
+    assert response.cache_write_status == QueryCacheWriteStatus.DISABLED
+    assert response.cache_ttl_seconds is None
     assert captured["user_context"].id == "user-1"
     assert captured["query"] == "security policy"
     assert captured["filters"].workspace_id == "workspace-a"
@@ -502,6 +510,9 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.verification_reason == (
         "LLM synthesis failed before verification. error_type=RuntimeError"
     )
+    assert response.cache_lookup_status == QueryCacheLookupStatus.MISS
+    assert response.cache_write_status == QueryCacheWriteStatus.SKIPPED
+    assert response.cache_ttl_seconds is None
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert response.answer == (
@@ -592,6 +603,9 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.verification_reason == "LLM synthesis was not requested."
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.response_payload["verification_status"] == "not_required"
+        assert query_run.response_payload["cache_lookup_status"] == "disabled"
+        assert query_run.response_payload["cache_write_status"] == "disabled"
+        assert query_run.response_payload["cache_ttl_seconds"] is None
         assert query_run.citations["items"][0]["title"] == "Security Policy"
 
 
@@ -759,10 +773,16 @@ def test_run_bm25_query_returns_cached_response(monkeypatch) -> None:
         assert response.answer == "Cached answer from authorized context."
         assert response.confidence_score == 0.44
         assert response.verification_status == AnswerVerificationStatus.NOT_REQUIRED
+        assert response.cache_lookup_status == QueryCacheLookupStatus.HIT
+        assert response.cache_write_status == QueryCacheWriteStatus.NOT_ATTEMPTED
+        assert response.cache_ttl_seconds is None
         assert response.latency_ms >= 0
         assert query_run.status == "completed"
         assert query_run.response_payload["agent_run_id"] == str(agent_run_id)
         assert query_run.response_payload["verification_status"] == "not_required"
+        assert query_run.response_payload["cache_lookup_status"] == "hit"
+        assert query_run.response_payload["cache_write_status"] == "not_attempted"
+        assert query_run.response_payload["cache_ttl_seconds"] is None
         assert query_run.answer == "Cached answer from authorized context."
         assert fake_redis.get_calls[0].startswith("agentic-rag:test:query:bm25:")
         assert "security policy" not in fake_redis.get_calls[0]
@@ -831,13 +851,78 @@ def test_run_bm25_query_writes_response_to_cache_on_miss(monkeypatch) -> None:
     cached_data = json.loads(cached_payload)
 
     assert response.answer.startswith("LLM synthesis is not enabled yet")
+    assert response.cache_lookup_status == QueryCacheLookupStatus.MISS
+    assert response.cache_write_status == QueryCacheWriteStatus.WRITTEN
+    assert response.cache_ttl_seconds == 60
     assert cached_key.startswith("agentic-rag:test:query:bm25:")
     assert ttl_seconds == 60
     assert cached_data["answer"] == response.answer
     assert cached_data["confidence_score"] == response.confidence_score
     assert cached_data["retrieval_strategy"] == "bm25"
     assert cached_data["verification_status"] == "not_required"
+    assert cached_data["cache_lookup_status"] == "miss"
+    assert cached_data["cache_write_status"] == "written"
+    assert cached_data["cache_ttl_seconds"] == 60
     assert "security policy" not in cached_key
+
+
+def test_run_bm25_query_marks_cache_write_failure(monkeypatch) -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+    fake_redis = FakeQueryCacheRedis(fail_set=True)
+
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Security policy content.",
+                    score=2.3,
+                    source=RetrievalTool.BM25_SEARCH,
+                    metadata={"token_count": 3},
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Security Policy",
+                        quote="Security policy content.",
+                        score=2.3,
+                    ),
+                )
+            ],
+            latency_ms=11,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.Redis.from_url",
+        lambda *args, **kwargs: fake_redis,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.query_cache_enabled",
+        True,
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+    )
+
+    response = run_bm25_query(
+        user_context=user_context,
+        request=QueryRequest(query="security policy"),
+    )
+
+    assert response.context[0].content == "Security policy content."
+    assert response.cache_lookup_status == QueryCacheLookupStatus.MISS
+    assert response.cache_write_status == QueryCacheWriteStatus.FAILED
+    assert response.cache_ttl_seconds is None
+    assert fake_redis.get_calls
+    assert fake_redis.setex_calls
 
 
 def test_run_bm25_query_falls_back_when_cache_is_unavailable(monkeypatch) -> None:
@@ -894,6 +979,9 @@ def test_run_bm25_query_falls_back_when_cache_is_unavailable(monkeypatch) -> Non
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert response.confidence_score == 0.58
+    assert response.cache_lookup_status == QueryCacheLookupStatus.SKIPPED
+    assert response.cache_write_status == QueryCacheWriteStatus.SKIPPED
+    assert response.cache_ttl_seconds is None
     assert fake_redis.get_calls
     assert fake_redis.setex_calls == []
 

@@ -47,6 +47,21 @@ class AnswerVerificationStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class QueryCacheLookupStatus(StrEnum):
+    DISABLED = "disabled"
+    HIT = "hit"
+    MISS = "miss"
+    SKIPPED = "skipped"
+
+
+class QueryCacheWriteStatus(StrEnum):
+    DISABLED = "disabled"
+    NOT_ATTEMPTED = "not_attempted"
+    WRITTEN = "written"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class QueryResponse(APIModel):
     agent_run_id: UUID
     answer: str
@@ -66,6 +81,9 @@ class QueryResponse(APIModel):
     synthesis_error: str | None = None
     verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
     verification_reason: str | None = None
+    cache_lookup_status: QueryCacheLookupStatus = QueryCacheLookupStatus.DISABLED
+    cache_write_status: QueryCacheWriteStatus = QueryCacheWriteStatus.DISABLED
+    cache_ttl_seconds: int | None = Field(default=None, ge=1)
 
 
 class QueryRunStatus(StrEnum):
