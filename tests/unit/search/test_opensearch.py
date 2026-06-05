@@ -185,3 +185,74 @@ def test_opensearch_client_searches_bm25_chunks() -> None:
 
     assert hits[0]["_score"] == 2.5
     assert [request.method for request in requests] == ["POST"]
+
+
+def test_opensearch_client_retries_bm25_search_retryable_status() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "hits": {
+                    "hits": [
+                        {
+                            "_score": 3.0,
+                            "_source": {
+                                "chunk_id": "00000000-0000-0000-0000-000000000001",
+                            },
+                        }
+                    ]
+                }
+            },
+            request=request,
+        )
+
+    client = OpenSearchClient(
+        base_url="http://opensearch:9200",
+        username="",
+        password="",
+        index_name="chunks-test",
+        search_retry_attempts=2,
+        search_retry_backoff_seconds=0.0,
+        transport=httpx.MockTransport(handler),
+    )
+
+    hits = client.search_chunks_bm25({"query": {"match_all": {}}})
+    client.close()
+
+    assert hits[0]["_score"] == 3.0
+    assert len(requests) == 2
+    assert [request.url.path for request in requests] == [
+        "/chunks-test/_search",
+        "/chunks-test/_search",
+    ]
+
+
+def test_opensearch_client_raises_after_bm25_search_retries_exhausted() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(503, request=request)
+
+    client = OpenSearchClient(
+        base_url="http://opensearch:9200",
+        username="",
+        password="",
+        index_name="chunks-test",
+        search_retry_attempts=2,
+        search_retry_backoff_seconds=0.0,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.search_chunks_bm25({"query": {"match_all": {}}})
+
+    client.close()
+
+    assert "HTTP status error" in str(exc_info.value)
+    assert len(requests) == 2

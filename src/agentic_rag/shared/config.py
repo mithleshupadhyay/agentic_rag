@@ -158,6 +158,17 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias="OPENSEARCH_REQUEST_TIMEOUT_SECONDS",
     )
+    opensearch_search_retry_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        validation_alias="OPENSEARCH_SEARCH_RETRY_ATTEMPTS",
+    )
+    opensearch_search_retry_backoff_seconds: float = Field(
+        default=0.25,
+        ge=0.0,
+        validation_alias="OPENSEARCH_SEARCH_RETRY_BACKOFF_SECONDS",
+    )
     opensearch_index_shards: int = Field(
         default=1,
         ge=1,

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Any, Optional
 
 import httpx
@@ -56,6 +57,8 @@ class OpenSearchClient:
         password: Optional[str] = None,
         index_name: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
+        search_retry_attempts: Optional[int] = None,
+        search_retry_backoff_seconds: Optional[float] = None,
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.base_url = (base_url or settings.opensearch_url).rstrip("/")
@@ -63,6 +66,20 @@ class OpenSearchClient:
         self.password = password if password is not None else settings.opensearch_password
         self.index_name = index_name or settings.opensearch_chunk_index
         self.timeout_seconds = timeout_seconds or settings.opensearch_request_timeout_seconds
+        self.search_retry_attempts = (
+            search_retry_attempts
+            if search_retry_attempts is not None
+            else settings.opensearch_search_retry_attempts
+        )
+        self.search_retry_backoff_seconds = (
+            search_retry_backoff_seconds
+            if search_retry_backoff_seconds is not None
+            else settings.opensearch_search_retry_backoff_seconds
+        )
+        if self.search_retry_attempts < 1:
+            raise ValueError("OpenSearch search retry attempts must be at least 1.")
+        if self.search_retry_backoff_seconds < 0:
+            raise ValueError("OpenSearch search retry backoff must not be negative.")
         auth = (self.username, self.password) if self.username and self.password else None
         self.client = httpx.Client(
             base_url=self.base_url,
@@ -170,10 +187,89 @@ class OpenSearchClient:
         index_name: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         index_name = index_name or self.index_name
-        logger.info(f"[OpenSearch] Searching BM25 chunks index={index_name}")
-        response = self.client.post(f"/{index_name}/_search", json=search_body)
-        response.raise_for_status()
-        response_data = response.json()
-        hits = response_data.get("hits", {}).get("hits", [])
-        logger.info(f"[OpenSearch] BM25 search returned {len(hits)} chunks")
-        return hits
+        retryable_status_codes = {429, 500, 502, 503, 504}
+        logger.info(
+            f"[OpenSearch] Searching BM25 chunks index={index_name} "
+            f"attempts={self.search_retry_attempts}"
+        )
+
+        for attempt in range(1, self.search_retry_attempts + 1):
+            try:
+                response = self.client.post(f"/{index_name}/_search", json=search_body)
+                if (
+                    response.status_code in retryable_status_codes
+                    and attempt < self.search_retry_attempts
+                ):
+                    logger.warning(
+                        f"[OpenSearch] BM25 search retryable status "
+                        f"index={index_name} status={response.status_code} "
+                        f"attempt={attempt}/{self.search_retry_attempts}"
+                    )
+                    if self.search_retry_backoff_seconds:
+                        time.sleep(self.search_retry_backoff_seconds)
+                    continue
+
+                response.raise_for_status()
+                response_data = response.json()
+                if not isinstance(response_data, dict):
+                    logger.error(
+                        f"[OpenSearch] BM25 search returned invalid response "
+                        f"index={index_name} response_type={type(response_data).__name__}"
+                    )
+                    raise RuntimeError("OpenSearch BM25 search returned an invalid response.")
+
+                hits_envelope = response_data.get("hits", {})
+                if not isinstance(hits_envelope, dict):
+                    logger.error(
+                        f"[OpenSearch] BM25 search returned invalid hits envelope "
+                        f"index={index_name} hits_type={type(hits_envelope).__name__}"
+                    )
+                    raise RuntimeError("OpenSearch BM25 search returned an invalid hits envelope.")
+
+                hits = hits_envelope.get("hits", [])
+                if not isinstance(hits, list):
+                    logger.error(
+                        f"[OpenSearch] BM25 search returned invalid hits list "
+                        f"index={index_name} hits_type={type(hits).__name__}"
+                    )
+                    raise RuntimeError("OpenSearch BM25 search returned an invalid hits list.")
+
+                logger.info(
+                    f"[OpenSearch] BM25 search returned {len(hits)} chunks "
+                    f"index={index_name} attempt={attempt}/{self.search_retry_attempts}"
+                )
+                return hits
+
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                if attempt < self.search_retry_attempts:
+                    logger.warning(
+                        f"[OpenSearch] BM25 search transport failure "
+                        f"index={index_name} attempt={attempt}/{self.search_retry_attempts}: {e}"
+                    )
+                    if self.search_retry_backoff_seconds:
+                        time.sleep(self.search_retry_backoff_seconds)
+                    continue
+
+                logger.exception(
+                    f"[OpenSearch] BM25 search transport failure exhausted "
+                    f"index={index_name} attempt={attempt}/{self.search_retry_attempts}: {e}"
+                )
+                raise RuntimeError("OpenSearch BM25 search failed after retry attempts.") from e
+
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code if e.response is not None else "unknown"
+                logger.exception(
+                    f"[OpenSearch] BM25 search failed "
+                    f"index={index_name} status={status_code} "
+                    f"attempt={attempt}/{self.search_retry_attempts}: {e}"
+                )
+                raise RuntimeError("OpenSearch BM25 search failed with HTTP status error.") from e
+
+            except ValueError as e:
+                logger.exception(
+                    f"[OpenSearch] BM25 search returned invalid JSON "
+                    f"index={index_name} attempt={attempt}/{self.search_retry_attempts}: {e}"
+                )
+                raise RuntimeError("OpenSearch BM25 search returned invalid JSON.") from e
+
+        raise RuntimeError("OpenSearch BM25 search failed after retry attempts.")
