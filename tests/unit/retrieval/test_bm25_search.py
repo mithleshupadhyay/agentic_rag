@@ -351,6 +351,72 @@ def test_search_bm25_chunks_skips_invalid_hits_and_keeps_valid_hit(caplog) -> No
     assert "Skipping invalid BM25 hit" in caplog.text
 
 
+def test_search_bm25_chunks_handles_invalid_highlight_fragments() -> None:
+    highlighted_document_id = uuid4()
+    highlighted_chunk_id = uuid4()
+    fallback_document_id = uuid4()
+    fallback_chunk_id = uuid4()
+    search_client = FakeSearchClient(
+        hits=[
+            {
+                "_score": 3.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(highlighted_document_id),
+                    "chunk_id": str(highlighted_chunk_id),
+                    "chunk_index": 1,
+                    "content": "Raw content should not be used when a highlight is valid.",
+                    "token_count": 8,
+                    "document_title": "Highlighted Result",
+                    "source_uri": "upload://highlighted.md",
+                },
+                "highlight": {
+                    "content": [None, "", "   ", "First valid highlighted fragment."]
+                },
+            },
+            {
+                "_score": 2.0,
+                "_source": {
+                    "tenant_id": "tenant-a",
+                    "workspace_id": "workspace-a",
+                    "document_id": str(fallback_document_id),
+                    "chunk_id": str(fallback_chunk_id),
+                    "chunk_index": 2,
+                    "content": "Fallback raw content.",
+                    "token_count": 3,
+                    "document_title": "Fallback Result",
+                    "source_uri": "upload://fallback.md",
+                },
+                "highlight": {
+                    "content": [None, "", "   "]
+                },
+            },
+        ]
+    )
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    response = search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        search_client=search_client,
+    )
+
+    assert len(response.candidates) == 2
+    assert response.candidates[0].chunk_id == highlighted_chunk_id
+    assert response.candidates[0].content == "First valid highlighted fragment."
+    assert response.candidates[0].citation.quote == "First valid highlighted fragment."
+    assert response.candidates[1].chunk_id == fallback_chunk_id
+    assert response.candidates[1].content == "Fallback raw content."
+    assert response.candidates[1].citation.quote == "Fallback raw content."
+
+
 def test_search_bm25_chunks_deduplicates_document_section_results() -> None:
     document_id = uuid4()
     lower_score_chunk_id = uuid4()

@@ -322,7 +322,15 @@ def search_bm25_chunks(
             highlighted_content = highlight.get("content") or []
             if not isinstance(highlighted_content, list):
                 highlighted_content = []
-            quote = highlighted_content[0] if highlighted_content else source.get("content")
+
+            quote = None
+            for highlighted_fragment in highlighted_content:
+                if isinstance(highlighted_fragment, str) and highlighted_fragment.strip():
+                    quote = highlighted_fragment
+                    break
+            if quote is None:
+                quote = source.get("content")
+
             if not isinstance(quote, str) or not quote.strip():
                 skipped_invalid_hit_count += 1
                 logger.warning(
