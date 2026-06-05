@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -107,6 +108,10 @@ def test_search_vector_chunks_generates_embedding_and_returns_candidates(
         filters=RetrievalFilters(
             workspace_id="workspace-a",
             document_ids=[document_id],
+            source_types=["upload"],
+            tags=["security"],
+            metadata={"department": "security"},
+            date_range={"created_at": {"gte": "2026-01-01T00:00:00Z"}},
         ),
         limit=5,
         min_similarity=0.7,
@@ -139,6 +144,12 @@ def test_search_vector_chunks_generates_embedding_and_returns_candidates(
     assert search_kwargs["embedding_dimension"] == 768
     assert search_kwargs["workspace_id"] == "workspace-a"
     assert search_kwargs["document_ids"] == [document_id]
+    assert search_kwargs["source_types"] == ["upload"]
+    assert search_kwargs["tags"] == ["security"]
+    assert search_kwargs["metadata_filters"] == {"department": "security"}
+    assert search_kwargs["date_range"] == {
+        "created_at": {"gte": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+    }
     assert search_kwargs["user_context"] == user_context
     assert search_kwargs["min_similarity"] == 0.7
 
@@ -166,23 +177,27 @@ def test_search_vector_chunks_returns_empty_for_workspace_mismatch() -> None:
     assert response.candidates == []
 
 
-def test_search_vector_chunks_rejects_unsupported_filters() -> None:
+def test_search_vector_chunks_rejects_invalid_metadata_filter() -> None:
     user_context = UserContext(
         id="user-1",
         customer_id="tenant-a",
         tenant_id="tenant-a",
     )
 
+    def fake_embedding_client(_request):
+        raise AssertionError("Embedding client should not be called.")
+
     with pytest.raises(HTTPException) as exc_info:
         vector_search.search_vector_chunks(
             db=None,
             user_context=user_context,
             query="security policy",
-            filters=RetrievalFilters(source_types=["upload"]),
+            filters=RetrievalFilters(metadata={"department.name": "security"}),
+            embedding_client=fake_embedding_client,
         )
 
     assert exc_info.value.status_code == 400
-    assert "workspace_id and document_ids" in exc_info.value.detail
+    assert "Metadata filter keys" in exc_info.value.detail
 
 
 def test_search_vector_chunks_rejects_embedding_dimension_mismatch() -> None:

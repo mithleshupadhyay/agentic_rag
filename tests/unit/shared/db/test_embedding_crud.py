@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
@@ -409,6 +410,103 @@ def test_search_similar_chunks_by_embedding_filters_model_and_version(
     )
 
     assert [result.chunk.id for result in results] == [current_chunk.id]
+
+
+def test_search_similar_chunks_by_embedding_applies_retrieval_filters(
+    db: Session,
+) -> None:
+    matching_document, matching_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Security policy for vector retrieval.",
+        content_hash="hash-vector-filter-match",
+    )
+    source_mismatch_document, source_mismatch_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Security policy from a URL source.",
+        content_hash="hash-vector-filter-source",
+    )
+    metadata_mismatch_document, metadata_mismatch_chunk = (
+        create_ready_document_with_chunk(
+            db,
+            tenant_id="tenant-a",
+            content="Finance policy for vector retrieval.",
+            content_hash="hash-vector-filter-metadata",
+        )
+    )
+    old_document, old_chunk = create_ready_document_with_chunk(
+        db,
+        tenant_id="tenant-a",
+        content="Old security policy for vector retrieval.",
+        content_hash="hash-vector-filter-old",
+    )
+
+    matching_document.metadata_ = {
+        "department": "security",
+        "tags": ["policy", "security"],
+    }
+    matching_chunk.metadata_ = {"section": "access"}
+    matching_chunk.created_at = datetime(2026, 1, 2, 10, 0, 0)
+
+    source_mismatch_document.source_type = DocumentSourceType.URL.value
+    source_mismatch_document.metadata_ = {
+        "department": "security",
+        "tags": ["policy", "security"],
+    }
+    source_mismatch_chunk.metadata_ = {"section": "access"}
+    source_mismatch_chunk.created_at = datetime(2026, 1, 2, 10, 0, 0)
+
+    metadata_mismatch_document.metadata_ = {
+        "department": "finance",
+        "tags": ["policy", "security"],
+    }
+    metadata_mismatch_chunk.metadata_ = {"section": "access"}
+    metadata_mismatch_chunk.created_at = datetime(2026, 1, 2, 10, 0, 0)
+
+    old_document.metadata_ = {
+        "department": "security",
+        "tags": ["policy", "security"],
+    }
+    old_chunk.metadata_ = {"section": "access"}
+    old_chunk.created_at = datetime(2025, 12, 1, 10, 0, 0)
+    db.commit()
+
+    for chunk in [
+        matching_chunk,
+        source_mismatch_chunk,
+        metadata_mismatch_chunk,
+        old_chunk,
+    ]:
+        create_chunk_embedding(
+            db=db,
+            tenant_id="tenant-a",
+            obj_in=embedding_payload(chunk, embedding=vector_at(0)),
+        )
+
+    user_context = UserContext(
+        id="user-2",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        group_ids=["security"],
+        acl_version=2,
+    )
+    results = search_similar_chunks_by_embedding(
+        db=db,
+        tenant_id="tenant-a",
+        query_embedding=vector_at(0),
+        embedding_model="text-embedding-test",
+        source_types=[DocumentSourceType.UPLOAD.value],
+        metadata_filters={
+            "department": "security",
+            "section": "access",
+        },
+        tags=["policy"],
+        date_range={"created_at": {"gte": datetime(2026, 1, 1, 0, 0, 0)}},
+        user_context=user_context,
+    )
+
+    assert [result.chunk.id for result in results] == [matching_chunk.id]
 
 
 def test_search_similar_chunks_by_embedding_excludes_deleted_records(

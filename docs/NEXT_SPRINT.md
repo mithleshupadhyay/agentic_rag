@@ -51,7 +51,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model with retry count, max retries, worker lock fields, lease expiry, and next retry timestamp for backoff scheduling. | Add stage timestamps, retry jitter fields if needed, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
 | `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, exponential retry backoff, retry eligibility, and lock cleanup on completion/failure. | Add retry jitter, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
-| `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, event chunk filtering, and vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, model/version migration support, and high-volume batch tuning. | High |
+| `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, event chunk filtering, and filtered vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing with tenant, document, and event chunk filters. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, status filtering, verification-status filtering, created-at date filtering, retention cleanup for old terminal runs, safe metric defaults, and listing helpers. | Add admin search and cache/budget metadata updates. | High |
 | `src/agentic_rag/shared/db/crud/agent_runs.py` | Tenant-scoped agent run persistence functions for create run, cancel active run, check cancelled status, record step, save checkpoint, fetch run with steps/checkpoints, and update terminal guardrail status from graph steps. | Add explicit status transition helpers only when API and worker lifecycle ownership needs them. | High |
@@ -67,7 +67,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/query/bm25_query.py` | Query orchestration for BM25 retrieval, authorization-scoped Redis cache lookup, cache response metadata, context building, deterministic no-result handling, deterministic answer confidence scoring, optional LLM synthesis, safe LLM failure fallback without caching failed synthesis responses, answer verification metadata, request ID propagation, metric accounting, and persisted query-run status updates. | Add synthesis handoff edge cases as behavior expands. | High |
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search with exact document/chunk metadata filters, indexed timestamp range filters, invalid-hit skipping, result deduplication by document/section, highlight fallback hardening, configurable minimum score filtering, and low-cardinality retrieval metric recording before candidates reach context building or LLM synthesis. | Add OpenSearch failure handling and retry behavior when the search client policy is selected. | High |
-| `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, calls pgvector search, and returns authorized vector candidates. | Add source/date/metadata filter support, result deduplication, and PostgreSQL/pgvector smoke coverage. | High |
+| `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, applies source, metadata, tag, date, tenant, workspace, document, and ACL filters, calls pgvector search, and returns authorized vector candidates. | Add result deduplication and PostgreSQL/pgvector smoke coverage. | High |
 | `src/agentic_rag/retrieval/hybrid_search.py` | Service-level hybrid retrieval that calls BM25 and vector retrieval, deduplicates by chunk ID, combines candidates with rank-based scoring, and reranks the merged candidates. | Add source/date/metadata filter support and hybrid retrieval quality tests. | High |
 | `src/agentic_rag/retrieval/reranker.py` | Deterministic provider-neutral reranker that scores authorized candidates against the query and preserves original retrieval score/source metadata. | Add model-backed reranker integration and latency/quality metrics. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-05 | Added source, metadata, tag, and date filters to vector retrieval. |
 | 2026-06-05 | Added BM25 query cache lookup and write metadata to query responses and persisted response payloads. |
 | 2026-06-05 | Hardened no-result BM25 query responses with skipped verification metadata. |
 | 2026-06-05 | Added OpenSearch chunk read/write alias support for indexing and BM25 search. |
@@ -170,7 +171,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add source, date, and metadata filters to vector retrieval. |
+| 1 | Add source, date, and metadata filters to hybrid retrieval. |
 
 ## Lowest Priority Final Polish
 

@@ -1,6 +1,7 @@
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -56,19 +57,6 @@ def search_vector_chunks(
         )
 
     filters = filters or RetrievalFilters()
-    if filters.source_types or filters.tags or filters.metadata or filters.date_range:
-        logger.warning(
-            f"[Retrieval] Vector search rejected unsupported filters "
-            f"tenant={user_context.tenant_id} user={user_context.id}"
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Vector search currently supports workspace_id and document_ids "
-                "filters only."
-            ),
-        )
-
     if user_context.workspace_id and filters.workspace_id:
         if user_context.workspace_id != filters.workspace_id:
             logger.warning(
@@ -81,6 +69,159 @@ def search_vector_chunks(
                 candidates=[],
                 latency_ms=int((time.perf_counter() - started_at) * 1000),
             )
+
+    source_types = []
+    for source_type in filters.source_types:
+        clean_source_type = source_type.strip()
+        if not clean_source_type:
+            logger.warning(
+                f"[Retrieval] Invalid vector source type filter "
+                f"tenant={user_context.tenant_id} user={user_context.id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Source type filters must be non-empty strings.",
+            )
+        source_types.append(clean_source_type)
+
+    tags = []
+    for tag in filters.tags:
+        clean_tag = tag.strip()
+        if not clean_tag:
+            logger.warning(
+                f"[Retrieval] Invalid vector tag filter "
+                f"tenant={user_context.tenant_id} user={user_context.id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Tag filters must be non-empty strings.",
+            )
+        tags.append(clean_tag)
+
+    metadata_filters: dict[str, object] = {}
+    if filters.metadata:
+        for metadata_key, metadata_value in filters.metadata.items():
+            clean_metadata_key = metadata_key.strip()
+            if not clean_metadata_key or "." in clean_metadata_key:
+                logger.warning(
+                    f"[Retrieval] Invalid vector metadata filter key "
+                    f"tenant={user_context.tenant_id} key={metadata_key}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Metadata filter keys must be non-empty top-level field names.",
+                )
+
+            if (
+                isinstance(metadata_value, str)
+                or isinstance(metadata_value, bool)
+                or isinstance(metadata_value, int)
+                or isinstance(metadata_value, float)
+            ):
+                metadata_filters[clean_metadata_key] = metadata_value
+            else:
+                logger.warning(
+                    f"[Retrieval] Invalid vector metadata filter value "
+                    f"tenant={user_context.tenant_id} key={clean_metadata_key} "
+                    f"value_type={type(metadata_value).__name__}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Metadata filter values must be strings, numbers, or booleans.",
+                )
+
+    date_range_filters: dict[str, dict[str, datetime]] = {}
+    if filters.date_range:
+        allowed_date_fields = {"created_at", "updated_at"}
+        allowed_date_operators = {"gt", "gte", "lt", "lte"}
+        for date_field, date_limits in filters.date_range.items():
+            if not isinstance(date_field, str):
+                logger.warning(
+                    f"[Retrieval] Invalid vector date range field "
+                    f"tenant={user_context.tenant_id} field={date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range fields must be created_at or updated_at.",
+                )
+
+            clean_date_field = date_field.strip()
+            if clean_date_field not in allowed_date_fields:
+                logger.warning(
+                    f"[Retrieval] Unsupported vector date range field "
+                    f"tenant={user_context.tenant_id} field={date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range fields must be created_at or updated_at.",
+                )
+
+            if not isinstance(date_limits, dict) or not date_limits:
+                logger.warning(
+                    f"[Retrieval] Invalid vector date range value "
+                    f"tenant={user_context.tenant_id} field={clean_date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range values must be non-empty operator maps.",
+                )
+
+            date_range_filters[clean_date_field] = {}
+            for date_operator, date_value in date_limits.items():
+                if not isinstance(date_operator, str):
+                    logger.warning(
+                        f"[Retrieval] Invalid vector date range operator "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range operators must be gt, gte, lt, or lte.",
+                    )
+
+                clean_date_operator = date_operator.strip()
+                if clean_date_operator not in allowed_date_operators:
+                    logger.warning(
+                        f"[Retrieval] Unsupported vector date range operator "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range operators must be gt, gte, lt, or lte.",
+                    )
+
+                if not isinstance(date_value, str) or not date_value.strip():
+                    logger.warning(
+                        f"[Retrieval] Invalid vector date range boundary "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={clean_date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range values must be ISO 8601 strings.",
+                    )
+
+                clean_date_value = date_value.strip()
+                normalized_date_value = clean_date_value
+                if normalized_date_value.endswith("Z"):
+                    normalized_date_value = normalized_date_value[:-1] + "+00:00"
+                try:
+                    parsed_date_value = datetime.fromisoformat(normalized_date_value)
+                except ValueError:
+                    logger.warning(
+                        f"[Retrieval] Invalid vector date range ISO value "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={clean_date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range values must be ISO 8601 strings.",
+                    ) from None
+
+                date_range_filters[clean_date_field][clean_date_operator] = (
+                    parsed_date_value
+                )
 
     embedding_response = embedding_client(
         EmbeddingRequest(
@@ -129,6 +270,10 @@ def search_vector_chunks(
         min_similarity=min_similarity,
         workspace_id=user_context.workspace_id or filters.workspace_id,
         document_ids=filters.document_ids,
+        source_types=source_types,
+        metadata_filters=metadata_filters,
+        tags=tags,
+        date_range=date_range_filters,
         user_context=user_context,
     )
 

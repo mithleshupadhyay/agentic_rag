@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from math import sqrt
 from typing import Optional
 from uuid import UUID
@@ -370,12 +371,22 @@ def search_similar_chunks_by_embedding(
     min_similarity: Optional[float] = None,
     workspace_id: Optional[str] = None,
     document_ids: Optional[list[UUID]] = None,
+    source_types: Optional[list[str]] = None,
+    metadata_filters: Optional[dict[str, object]] = None,
+    tags: Optional[list[str]] = None,
+    date_range: Optional[dict[str, dict[str, datetime]]] = None,
     user_context: Optional[UserContext] = None,
 ) -> list[ChunkVectorSearchResult]:
+    source_types = source_types or []
+    metadata_filters = metadata_filters or {}
+    tags = tags or []
+    date_range = date_range or {}
     logger.info(
         f"[DB] Searching similar chunks tenant={tenant_id} model={embedding_model} "
         f"vector_version={vector_version} limit={limit} workspace_id={workspace_id} "
-        f"document_count={len(document_ids or [])}"
+        f"document_count={len(document_ids or [])} source_type_count={len(source_types)} "
+        f"metadata_filter_count={len(metadata_filters)} tag_count={len(tags)} "
+        f"date_filter_count={len(date_range)}"
     )
     if not query_embedding:
         raise HTTPException(status_code=400, detail="Query embedding is required.")
@@ -428,6 +439,71 @@ def search_similar_chunks_by_embedding(
             query = query.filter(DocumentChunk.workspace_id == workspace_id)
         if document_ids:
             query = query.filter(DocumentChunk.document_id.in_(document_ids))
+        if source_types:
+            query = query.filter(Document.source_type.in_(source_types))
+        for metadata_key, metadata_value in metadata_filters.items():
+            if isinstance(metadata_value, str):
+                query = query.filter(
+                    or_(
+                        Document.metadata_[metadata_key].as_string() == metadata_value,
+                        DocumentChunk.metadata_[metadata_key].as_string()
+                        == metadata_value,
+                    )
+                )
+            else:
+                query = query.filter(
+                    or_(
+                        Document.metadata_[metadata_key] == metadata_value,
+                        DocumentChunk.metadata_[metadata_key] == metadata_value,
+                    )
+                )
+        for tag in tags:
+            tag_value = tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query = query.filter(
+                or_(
+                    Document.metadata_["tags"].as_string().like(
+                        f'%"{tag_value}"%',
+                        escape="\\",
+                    ),
+                    DocumentChunk.metadata_["tags"].as_string().like(
+                        f'%"{tag_value}"%',
+                        escape="\\",
+                    ),
+                )
+            )
+        for date_field, date_limits in date_range.items():
+            if date_field == "created_at":
+                date_column = DocumentChunk.created_at
+            elif date_field == "updated_at":
+                date_column = DocumentChunk.updated_at
+            else:
+                logger.warning(
+                    f"[DB] Invalid vector date range field tenant={tenant_id} "
+                    f"field={date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range fields must be created_at or updated_at.",
+                )
+
+            for date_operator, date_value in date_limits.items():
+                if date_operator == "gt":
+                    query = query.filter(date_column > date_value)
+                elif date_operator == "gte":
+                    query = query.filter(date_column >= date_value)
+                elif date_operator == "lt":
+                    query = query.filter(date_column < date_value)
+                elif date_operator == "lte":
+                    query = query.filter(date_column <= date_value)
+                else:
+                    logger.warning(
+                        f"[DB] Invalid vector date range operator tenant={tenant_id} "
+                        f"field={date_field} operator={date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range operators must be gt, gte, lt, or lte.",
+                    )
 
         query_embedding_norm = sqrt(sum(value * value for value in query_embedding))
         user_group_set = set(user_context.group_ids or []) if user_context else set()
@@ -538,6 +614,63 @@ def search_similar_chunks_by_embedding(
         query = query.filter(DocumentChunk.workspace_id == workspace_id)
     if document_ids:
         query = query.filter(DocumentChunk.document_id.in_(document_ids))
+    if source_types:
+        query = query.filter(Document.source_type.in_(source_types))
+    for metadata_key, metadata_value in metadata_filters.items():
+        if isinstance(metadata_value, str):
+            query = query.filter(
+                or_(
+                    Document.metadata_[metadata_key].as_string() == metadata_value,
+                    DocumentChunk.metadata_[metadata_key].as_string() == metadata_value,
+                )
+            )
+        else:
+            query = query.filter(
+                or_(
+                    Document.metadata_[metadata_key] == metadata_value,
+                    DocumentChunk.metadata_[metadata_key] == metadata_value,
+                )
+            )
+    for tag in tags:
+        query = query.filter(
+            or_(
+                Document.metadata_["tags"].contains([tag]),
+                DocumentChunk.metadata_["tags"].contains([tag]),
+            )
+        )
+    for date_field, date_limits in date_range.items():
+        if date_field == "created_at":
+            date_column = DocumentChunk.created_at
+        elif date_field == "updated_at":
+            date_column = DocumentChunk.updated_at
+        else:
+            logger.warning(
+                f"[DB] Invalid vector date range field tenant={tenant_id} "
+                f"field={date_field}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Date range fields must be created_at or updated_at.",
+            )
+
+        for date_operator, date_value in date_limits.items():
+            if date_operator == "gt":
+                query = query.filter(date_column > date_value)
+            elif date_operator == "gte":
+                query = query.filter(date_column >= date_value)
+            elif date_operator == "lt":
+                query = query.filter(date_column < date_value)
+            elif date_operator == "lte":
+                query = query.filter(date_column <= date_value)
+            else:
+                logger.warning(
+                    f"[DB] Invalid vector date range operator tenant={tenant_id} "
+                    f"field={date_field} operator={date_operator}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range operators must be gt, gte, lt, or lte.",
+                )
     if min_similarity is not None:
         query = query.filter(distance_expr <= 1.0 - min_similarity)
 
