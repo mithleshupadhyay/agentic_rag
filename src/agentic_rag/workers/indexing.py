@@ -57,7 +57,7 @@ def process_bm25_index_batch(
 
     try:
         search_client.ensure_chunk_index(index_name)
-        indexed_count = search_client.bulk_index_chunks(chunks, index_name=index_name)
+        indexed_count = search_client.bulk_index_chunks(chunks)
         for chunk in chunks:
             mark_chunk_bm25_indexed(
                 db=db,

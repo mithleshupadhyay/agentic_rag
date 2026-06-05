@@ -32,12 +32,12 @@ class FakeSearchClient:
     def bulk_index_chunks(
         self,
         chunks: list[DocumentChunk],
-        index_name: str,
+        index_name: str | None = None,
     ) -> int:
         if self.fail:
             raise RuntimeError("OpenSearch unavailable")
         self.indexed_chunks.extend(chunks)
-        assert index_name == self.index_name
+        assert index_name is None
         return len(chunks)
 
 

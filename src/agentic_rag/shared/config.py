@@ -153,6 +153,16 @@ class Settings(BaseSettings):
         default="chunks-v1",
         validation_alias="OPENSEARCH_CHUNK_INDEX",
     )
+    opensearch_chunk_read_alias: str = Field(
+        default="chunks-read",
+        min_length=1,
+        validation_alias="OPENSEARCH_CHUNK_READ_ALIAS",
+    )
+    opensearch_chunk_write_alias: str = Field(
+        default="chunks-write",
+        min_length=1,
+        validation_alias="OPENSEARCH_CHUNK_WRITE_ALIAS",
+    )
     opensearch_request_timeout_seconds: int = Field(
         default=10,
         ge=1,

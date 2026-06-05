@@ -54,6 +54,18 @@ def test_kafka_settings_use_kafka_environment_names() -> None:
     assert settings.kafka_indexing_consumer_group == "indexing-group-a"
 
 
+def test_opensearch_settings_use_index_and_alias_names() -> None:
+    settings = Settings(
+        OPENSEARCH_CHUNK_INDEX="chunks-v2",
+        OPENSEARCH_CHUNK_READ_ALIAS="chunks-read",
+        OPENSEARCH_CHUNK_WRITE_ALIAS="chunks-write",
+    )
+
+    assert settings.opensearch_chunk_index == "chunks-v2"
+    assert settings.opensearch_chunk_read_alias == "chunks-read"
+    assert settings.opensearch_chunk_write_alias == "chunks-write"
+
+
 def test_redis_and_llm_circuit_breaker_settings() -> None:
     settings = Settings(
         REDIS_URL="redis://redis:6379/1",

@@ -114,10 +114,12 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
             properties = payload["mappings"]["properties"]
             assert properties["document_metadata"] == {"type": "object", "dynamic": True}
             assert properties["chunk_metadata"] == {"type": "object", "dynamic": True}
+            assert payload["aliases"]["chunks-read-test"] == {}
+            assert payload["aliases"]["chunks-write-test"] == {"is_write_index": True}
             return httpx.Response(200, json={"acknowledged": True}, request=request)
         if request.method == "POST" and request.url.path == "/_bulk":
             body_lines = request.content.decode("utf-8").strip().splitlines()
-            assert json.loads(body_lines[0])["index"]["_index"] == "chunks-test"
+            assert json.loads(body_lines[0])["index"]["_index"] == "chunks-write-test"
             assert json.loads(body_lines[1])["tenant_id"] == "tenant-a"
             return httpx.Response(200, json={"errors": False, "items": []}, request=request)
         return httpx.Response(500, request=request)
@@ -127,6 +129,8 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
         username="",
         password="",
         index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
         transport=httpx.MockTransport(handler),
     )
 
@@ -136,6 +140,49 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
 
     assert indexed_count == 1
     assert [request.method for request in requests] == ["GET", "PUT", "POST"]
+
+
+def test_opensearch_client_ensures_aliases_for_existing_chunk_index() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET" and request.url.path == "/chunks-test":
+            return httpx.Response(200, json={}, request=request)
+        if request.method == "POST" and request.url.path == "/_aliases":
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["actions"] == [
+                {
+                    "add": {
+                        "index": "chunks-test",
+                        "alias": "chunks-read-test",
+                    }
+                },
+                {
+                    "add": {
+                        "index": "chunks-test",
+                        "alias": "chunks-write-test",
+                        "is_write_index": True,
+                    }
+                },
+            ]
+            return httpx.Response(200, json={"acknowledged": True}, request=request)
+        return httpx.Response(500, request=request)
+
+    client = OpenSearchClient(
+        base_url="http://opensearch:9200",
+        username="",
+        password="",
+        index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.ensure_chunk_index()
+    client.close()
+
+    assert [request.method for request in requests] == ["GET", "POST"]
 
 
 def test_opensearch_client_reports_bulk_index_item_failures(db: Session) -> None:
@@ -170,6 +217,8 @@ def test_opensearch_client_reports_bulk_index_item_failures(db: Session) -> None
         username="",
         password="",
         index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
         transport=httpx.MockTransport(handler),
     )
 
@@ -190,7 +239,7 @@ def test_opensearch_client_searches_bm25_chunks() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.method == "POST" and request.url.path == "/chunks-test/_search":
+        if request.method == "POST" and request.url.path == "/chunks-read-test/_search":
             body = json.loads(request.content.decode("utf-8"))
             assert body["query"]["bool"]["filter"][0]["term"]["tenant_id"] == "tenant-a"
             return httpx.Response(
@@ -216,6 +265,8 @@ def test_opensearch_client_searches_bm25_chunks() -> None:
         username="",
         password="",
         index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
         transport=httpx.MockTransport(handler),
     )
 
@@ -263,6 +314,8 @@ def test_opensearch_client_retries_bm25_search_retryable_status() -> None:
         username="",
         password="",
         index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
         search_retry_attempts=2,
         search_retry_backoff_seconds=0.0,
         transport=httpx.MockTransport(handler),
@@ -274,8 +327,8 @@ def test_opensearch_client_retries_bm25_search_retryable_status() -> None:
     assert hits[0]["_score"] == 3.0
     assert len(requests) == 2
     assert [request.url.path for request in requests] == [
-        "/chunks-test/_search",
-        "/chunks-test/_search",
+        "/chunks-read-test/_search",
+        "/chunks-read-test/_search",
     ]
 
 
@@ -291,6 +344,8 @@ def test_opensearch_client_raises_after_bm25_search_retries_exhausted() -> None:
         username="",
         password="",
         index_name="chunks-test",
+        chunk_read_alias="chunks-read-test",
+        chunk_write_alias="chunks-write-test",
         search_retry_attempts=2,
         search_retry_backoff_seconds=0.0,
         transport=httpx.MockTransport(handler),

@@ -56,6 +56,8 @@ class OpenSearchClient:
         username: Optional[str] = None,
         password: Optional[str] = None,
         index_name: Optional[str] = None,
+        chunk_read_alias: Optional[str] = None,
+        chunk_write_alias: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         search_retry_attempts: Optional[int] = None,
         search_retry_backoff_seconds: Optional[float] = None,
@@ -65,6 +67,16 @@ class OpenSearchClient:
         self.username = username if username is not None else settings.opensearch_username
         self.password = password if password is not None else settings.opensearch_password
         self.index_name = index_name or settings.opensearch_chunk_index
+        self.chunk_read_alias = (
+            chunk_read_alias
+            if chunk_read_alias is not None
+            else settings.opensearch_chunk_read_alias
+        )
+        self.chunk_write_alias = (
+            chunk_write_alias
+            if chunk_write_alias is not None
+            else settings.opensearch_chunk_write_alias
+        )
         self.timeout_seconds = timeout_seconds or settings.opensearch_request_timeout_seconds
         self.search_retry_attempts = (
             search_retry_attempts
@@ -80,6 +92,15 @@ class OpenSearchClient:
             raise ValueError("OpenSearch search retry attempts must be at least 1.")
         if self.search_retry_backoff_seconds < 0:
             raise ValueError("OpenSearch search retry backoff must not be negative.")
+        if not self.chunk_read_alias:
+            raise ValueError("OpenSearch chunk read alias must not be empty.")
+        if not self.chunk_write_alias:
+            raise ValueError("OpenSearch chunk write alias must not be empty.")
+        if self.chunk_read_alias == self.index_name:
+            raise ValueError("OpenSearch chunk read alias must not match the physical index name.")
+        if self.chunk_write_alias == self.index_name:
+            raise ValueError("OpenSearch chunk write alias must not match the physical index name.")
+
         auth = (self.username, self.password) if self.username and self.password else None
         self.client = httpx.Client(
             base_url=self.base_url,
@@ -93,10 +114,52 @@ class OpenSearchClient:
 
     def ensure_chunk_index(self, index_name: Optional[str] = None) -> None:
         index_name = index_name or self.index_name
-        logger.info(f"[OpenSearch] Ensuring chunk index {index_name}")
+        alias_actions = []
+        aliases = {}
+        if self.chunk_read_alias == self.chunk_write_alias:
+            aliases[self.chunk_read_alias] = {"is_write_index": True}
+            alias_actions.append(
+                {
+                    "add": {
+                        "index": index_name,
+                        "alias": self.chunk_read_alias,
+                        "is_write_index": True,
+                    }
+                }
+            )
+        else:
+            aliases[self.chunk_read_alias] = {}
+            aliases[self.chunk_write_alias] = {"is_write_index": True}
+            alias_actions.append(
+                {
+                    "add": {
+                        "index": index_name,
+                        "alias": self.chunk_read_alias,
+                    }
+                }
+            )
+            alias_actions.append(
+                {
+                    "add": {
+                        "index": index_name,
+                        "alias": self.chunk_write_alias,
+                        "is_write_index": True,
+                    }
+                }
+            )
+
+        logger.info(
+            f"[OpenSearch] Ensuring chunk index {index_name} "
+            f"read_alias={self.chunk_read_alias} write_alias={self.chunk_write_alias}"
+        )
         response = self.client.get(f"/{index_name}")
         if response.status_code == 200:
-            logger.info(f"[OpenSearch] Chunk index exists {index_name}")
+            alias_response = self.client.post("/_aliases", json={"actions": alias_actions})
+            alias_response.raise_for_status()
+            logger.info(
+                f"[OpenSearch] Chunk index exists {index_name} "
+                f"read_alias={self.chunk_read_alias} write_alias={self.chunk_write_alias}"
+            )
             return
         if response.status_code != 404:
             response.raise_for_status()
@@ -145,17 +208,21 @@ class OpenSearchClient:
                     "updated_at": {"type": "date"},
                 },
             },
+            "aliases": aliases,
         }
         create_response = self.client.put(f"/{index_name}", json=payload)
         create_response.raise_for_status()
-        logger.info(f"[OpenSearch] Created chunk index {index_name}")
+        logger.info(
+            f"[OpenSearch] Created chunk index {index_name} "
+            f"read_alias={self.chunk_read_alias} write_alias={self.chunk_write_alias}"
+        )
 
     def bulk_index_chunks(
         self,
         chunks: list[DocumentChunk],
         index_name: Optional[str] = None,
     ) -> int:
-        index_name = index_name or self.index_name
+        index_name = index_name or self.chunk_write_alias
         if not chunks:
             logger.info("[OpenSearch] No chunks to index")
             return 0
@@ -241,7 +308,7 @@ class OpenSearchClient:
         search_body: dict[str, Any],
         index_name: Optional[str] = None,
     ) -> list[dict[str, Any]]:
-        index_name = index_name or self.index_name
+        index_name = index_name or self.chunk_read_alias
         retryable_status_codes = {429, 500, 502, 503, 504}
         logger.info(
             f"[OpenSearch] Searching BM25 chunks index={index_name} "
