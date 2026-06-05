@@ -1,3 +1,4 @@
+from datetime import datetime
 import logging
 import time
 from typing import Optional
@@ -119,6 +120,97 @@ def search_bm25_chunks(
                     }
                 }
             )
+    if filters.date_range:
+        allowed_date_fields = {"created_at", "updated_at"}
+        allowed_date_operators = {"gt", "gte", "lt", "lte"}
+        for date_field, date_limits in filters.date_range.items():
+            if not isinstance(date_field, str):
+                logger.warning(
+                    f"[Retrieval] Invalid BM25 date range field "
+                    f"tenant={user_context.tenant_id} field={date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range fields must be created_at or updated_at.",
+                )
+
+            clean_date_field = date_field.strip()
+            if clean_date_field not in allowed_date_fields:
+                logger.warning(
+                    f"[Retrieval] Unsupported BM25 date range field "
+                    f"tenant={user_context.tenant_id} field={date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range fields must be created_at or updated_at.",
+                )
+
+            if not isinstance(date_limits, dict) or not date_limits:
+                logger.warning(
+                    f"[Retrieval] Invalid BM25 date range value "
+                    f"tenant={user_context.tenant_id} field={clean_date_field}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date range values must be non-empty operator maps.",
+                )
+
+            range_query = {}
+            for date_operator, date_value in date_limits.items():
+                if not isinstance(date_operator, str):
+                    logger.warning(
+                        f"[Retrieval] Invalid BM25 date range operator "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range operators must be gt, gte, lt, or lte.",
+                    )
+
+                clean_date_operator = date_operator.strip()
+                if clean_date_operator not in allowed_date_operators:
+                    logger.warning(
+                        f"[Retrieval] Unsupported BM25 date range operator "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range operators must be gt, gte, lt, or lte.",
+                    )
+
+                if not isinstance(date_value, str) or not date_value.strip():
+                    logger.warning(
+                        f"[Retrieval] Invalid BM25 date range boundary "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={clean_date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range values must be ISO 8601 strings.",
+                    )
+
+                clean_date_value = date_value.strip()
+                normalized_date_value = clean_date_value
+                if normalized_date_value.endswith("Z"):
+                    normalized_date_value = normalized_date_value[:-1] + "+00:00"
+                try:
+                    datetime.fromisoformat(normalized_date_value)
+                except ValueError:
+                    logger.warning(
+                        f"[Retrieval] Invalid BM25 date range ISO value "
+                        f"tenant={user_context.tenant_id} field={clean_date_field} "
+                        f"operator={clean_date_operator}"
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Date range values must be ISO 8601 strings.",
+                    ) from None
+
+                range_query[clean_date_operator] = clean_date_value
+
+            filter_clauses.append({"range": {clean_date_field: range_query}})
 
     must_not_clauses: list[dict] = [
         {"term": {"denied_user_ids": user_context.id}},

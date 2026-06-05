@@ -183,6 +183,108 @@ def test_search_bm25_chunks_rejects_nested_metadata_filter_key() -> None:
     assert search_client.search_body is None
 
 
+def test_search_bm25_chunks_adds_date_range_filters() -> None:
+    search_client = FakeSearchClient()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        acl_version=4,
+    )
+
+    search_bm25_chunks(
+        user_context=user_context,
+        query="security policy",
+        filters=RetrievalFilters(
+            date_range={
+                "created_at": {
+                    "gte": "2026-06-01T00:00:00Z",
+                    "lte": "2026-06-05T23:59:59Z",
+                },
+                "updated_at": {
+                    "gt": "2026-06-02T00:00:00+00:00",
+                    "lt": "2026-06-06T00:00:00+00:00",
+                },
+            }
+        ),
+        search_client=search_client,
+    )
+
+    filter_clauses = search_client.search_body["query"]["bool"]["filter"]
+
+    assert {
+        "range": {
+            "created_at": {
+                "gte": "2026-06-01T00:00:00Z",
+                "lte": "2026-06-05T23:59:59Z",
+            }
+        }
+    } in filter_clauses
+    assert {
+        "range": {
+            "updated_at": {
+                "gt": "2026-06-02T00:00:00+00:00",
+                "lt": "2026-06-06T00:00:00+00:00",
+            }
+        }
+    } in filter_clauses
+
+
+def test_search_bm25_chunks_rejects_unknown_date_range_field() -> None:
+    search_client = FakeSearchClient()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        search_bm25_chunks(
+            user_context=user_context,
+            query="security policy",
+            filters=RetrievalFilters(
+                date_range={
+                    "document_date": {
+                        "gte": "2026-06-01T00:00:00Z",
+                    }
+                }
+            ),
+            search_client=search_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert search_client.search_body is None
+
+
+def test_search_bm25_chunks_rejects_invalid_date_range_value() -> None:
+    search_client = FakeSearchClient()
+    user_context = UserContext(
+        id="user-1",
+        customer_id="tenant-a",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        search_bm25_chunks(
+            user_context=user_context,
+            query="security policy",
+            filters=RetrievalFilters(
+                date_range={
+                    "created_at": {
+                        "gte": "not-a-date",
+                    }
+                }
+            ),
+            search_client=search_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert search_client.search_body is None
+
+
 def test_search_bm25_chunks_filters_low_score_candidates(monkeypatch) -> None:
     high_score_document_id = uuid4()
     high_score_chunk_id = uuid4()
