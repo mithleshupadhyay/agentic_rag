@@ -31,6 +31,35 @@ groups:
           summary: Agentic RAG query p95 latency is high
           description: Query p95 latency has stayed above 2.5 seconds for 10 minutes.
 
+      - alert: AgenticRagBM25RetrievalHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(agentic_rag_retrieval_latency_seconds_bucket{retrieval_strategy="bm25",status="completed"}[5m])
+            )
+          )
+          > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: retrieval
+        annotations:
+          summary: Agentic RAG BM25 retrieval p95 latency is high
+          description: BM25 retrieval p95 latency has stayed above 1 second for 10 minutes.
+
+      - alert: AgenticRagBM25RetrievalFailures
+        expr: |
+          sum(rate(agentic_rag_retrieval_lifecycle_total{retrieval_strategy="bm25",status="failed"}[5m]))
+          > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: retrieval
+        annotations:
+          summary: Agentic RAG BM25 retrieval is failing
+          description: BM25 retrieval has reported failures for 5 minutes.
+
       - alert: AgenticRagLLMProviderCircuitOpen
         expr: |
           max by (provider, model) (
