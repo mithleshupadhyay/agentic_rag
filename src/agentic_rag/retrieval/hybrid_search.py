@@ -52,19 +52,6 @@ def search_hybrid_chunks(
         )
 
     filters = filters or RetrievalFilters()
-    if filters.source_types or filters.tags or filters.metadata or filters.date_range:
-        logger.warning(
-            f"[Retrieval] Hybrid search rejected unsupported filters "
-            f"tenant={user_context.tenant_id} user={user_context.id}"
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Hybrid search currently supports workspace_id and document_ids "
-                "filters only."
-            ),
-        )
-
     bm25_response = search_bm25_chunks(
         user_context=user_context,
         query=query_text,

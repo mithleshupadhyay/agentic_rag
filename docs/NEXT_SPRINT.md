@@ -68,7 +68,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/query/answer_verifier.py` | Deterministic answer-support verifier for citation presence and citation-to-context mapping. | Add quote-level support checks, verifier confidence scoring, and optional LLM-based grounding verification later. | High |
 | `src/agentic_rag/retrieval/bm25_search.py` | Product retrieval logic for tenant/ACL-filtered BM25 chunk search with exact document/chunk metadata filters, indexed timestamp range filters, invalid-hit skipping, result deduplication by document/section, highlight fallback hardening, configurable minimum score filtering, and low-cardinality retrieval metric recording before candidates reach context building or LLM synthesis. | Add OpenSearch failure handling and retry behavior when the search client policy is selected. | High |
 | `src/agentic_rag/retrieval/vector_search.py` | Provider-neutral vector retrieval service that embeds the query through the LLM gateway, applies source, metadata, tag, date, tenant, workspace, document, and ACL filters, calls pgvector search, and returns authorized vector candidates. | Add result deduplication and PostgreSQL/pgvector smoke coverage. | High |
-| `src/agentic_rag/retrieval/hybrid_search.py` | Service-level hybrid retrieval that calls BM25 and vector retrieval, deduplicates by chunk ID, combines candidates with rank-based scoring, and reranks the merged candidates. | Add source/date/metadata filter support and hybrid retrieval quality tests. | High |
+| `src/agentic_rag/retrieval/hybrid_search.py` | Service-level hybrid retrieval that forwards source, metadata, tag, date, tenant, workspace, document, and ACL filters to BM25 and vector retrieval, deduplicates by chunk ID, combines candidates with rank-based scoring, and reranks the merged candidates. | Add hybrid retrieval quality tests as ranking behavior expands. | High |
 | `src/agentic_rag/retrieval/reranker.py` | Deterministic provider-neutral reranker that scores authorized candidates against the query and preserves original retrieval score/source metadata. | Add model-backed reranker integration and latency/quality metrics. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
 | `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop that can poll pending chunks or consume `ingestion.index` when Kafka consuming is enabled. | Add worker leases, retry/DLQ behavior, graceful shutdown, and per-tenant indexing quotas. | High |
@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-06-05 | Added source, metadata, tag, and date filter forwarding to hybrid retrieval. |
 | 2026-06-05 | Added source, metadata, tag, and date filters to vector retrieval. |
 | 2026-06-05 | Added BM25 query cache lookup and write metadata to query responses and persisted response payloads. |
 | 2026-06-05 | Hardened no-result BM25 query responses with skipped verification metadata. |
@@ -171,7 +172,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add source, date, and metadata filters to hybrid retrieval. |
+| 1 | Add result deduplication to vector retrieval. |
 
 ## Lowest Priority Final Polish
 

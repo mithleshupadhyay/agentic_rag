@@ -34,6 +34,10 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
     filters = RetrievalFilters(
         workspace_id="workspace-a",
         document_ids=[shared_document_id],
+        source_types=["upload"],
+        tags=["security"],
+        metadata={"department": "security"},
+        date_range={"created_at": {"gte": "2026-01-01T00:00:00Z"}},
     )
     captured = {}
 
@@ -212,10 +216,22 @@ def test_search_hybrid_chunks_merges_bm25_and_vector_candidates(monkeypatch) -> 
     ]
     assert captured["bm25_query"] == "security policy"
     assert captured["bm25_filters"] == filters
+    assert captured["bm25_filters"].source_types == ["upload"]
+    assert captured["bm25_filters"].tags == ["security"]
+    assert captured["bm25_filters"].metadata == {"department": "security"}
+    assert captured["bm25_filters"].date_range == {
+        "created_at": {"gte": "2026-01-01T00:00:00Z"}
+    }
     assert captured["bm25_limit"] == 5
     assert captured["vector_db"] is db
     assert captured["vector_query"] == "security policy"
     assert captured["vector_filters"] == filters
+    assert captured["vector_filters"].source_types == ["upload"]
+    assert captured["vector_filters"].tags == ["security"]
+    assert captured["vector_filters"].metadata == {"department": "security"}
+    assert captured["vector_filters"].date_range == {
+        "created_at": {"gte": "2026-01-01T00:00:00Z"}
+    }
     assert captured["vector_limit"] == 5
     assert captured["vector_min_similarity"] == 0.7
     assert captured["rerank_query"] == "security policy"
@@ -295,23 +311,65 @@ def test_search_hybrid_chunks_truncates_to_limit(monkeypatch) -> None:
     assert [candidate.chunk_id for candidate in response.candidates] == [first_chunk_id]
 
 
-def test_search_hybrid_chunks_rejects_unsupported_filters() -> None:
+def test_search_hybrid_chunks_passes_filters_to_retrieval_tools(monkeypatch) -> None:
     user_context = UserContext(
         id="user-1",
         customer_id="tenant-a",
         tenant_id="tenant-a",
     )
+    filters = RetrievalFilters(
+        source_types=["upload"],
+        tags=["security"],
+        metadata={"department": "security"},
+        date_range={"updated_at": {"lte": "2026-01-31T00:00:00Z"}},
+    )
+    captured = {}
 
-    with pytest.raises(HTTPException) as exc_info:
-        hybrid_search.search_hybrid_chunks(
-            db=None,
-            user_context=user_context,
-            query="security policy",
-            filters=RetrievalFilters(source_types=["upload"]),
+    def fake_search_bm25_chunks(user_context, query, filters, limit):
+        captured["bm25_filters"] = filters
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[],
+            latency_ms=1,
         )
 
-    assert exc_info.value.status_code == 400
-    assert "workspace_id and document_ids" in exc_info.value.detail
+    def fake_search_vector_chunks(
+        db,
+        user_context,
+        query,
+        filters,
+        limit,
+        min_similarity,
+    ):
+        captured["vector_filters"] = filters
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.VECTOR,
+            candidates=[],
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(
+        hybrid_search,
+        "search_bm25_chunks",
+        fake_search_bm25_chunks,
+    )
+    monkeypatch.setattr(
+        hybrid_search,
+        "search_vector_chunks",
+        fake_search_vector_chunks,
+    )
+
+    response = hybrid_search.search_hybrid_chunks(
+        db=None,
+        user_context=user_context,
+        query="security policy",
+        filters=filters,
+    )
+
+    assert response.strategy == RetrievalStrategy.HYBRID
+    assert response.candidates == []
+    assert captured["bm25_filters"] == filters
+    assert captured["vector_filters"] == filters
 
 
 def test_search_hybrid_chunks_rejects_blank_query() -> None:
