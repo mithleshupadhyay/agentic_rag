@@ -5,7 +5,7 @@ DOCKER_COMPOSE_FILE ?= docker-compose.yml
 DOCKER_PROJECT ?= agentic-rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-vector-retrieval docker-smoke-bm25-retrieval docker-smoke-kafka-producer docker-smoke-kafka-consumer docker-smoke-monitoring
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-vector-retrieval docker-smoke-bm25-retrieval docker-smoke-upload-query docker-smoke-kafka-producer docker-smoke-kafka-consumer docker-smoke-monitoring
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -28,6 +28,7 @@ help:
 	@printf '%s\n' "  make docker-smoke-embedding-worker Check embedding worker container imports and DB connection"
 	@printf '%s\n' "  make docker-smoke-vector-retrieval Check PostgreSQL/pgvector vector retrieval"
 	@printf '%s\n' "  make docker-smoke-bm25-retrieval Check OpenSearch BM25 retrieval"
+	@printf '%s\n' "  make docker-smoke-upload-query Check upload, ingestion, BM25 indexing, and query"
 	@printf '%s\n' "  make docker-smoke-kafka-producer Publish one retry event to local Kafka"
 	@printf '%s\n' "  make docker-smoke-kafka-consumer Consume one retry event and complete an ingestion job"
 	@printf '%s\n' "  make docker-smoke-monitoring Check Prometheus rules and Grafana provisioning"
@@ -97,6 +98,9 @@ docker-smoke-vector-retrieval: ensure-env
 
 docker-smoke-bm25-retrieval: ensure-env
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T api python scripts/smoke_bm25_retrieval.py
+
+docker-smoke-upload-query: ensure-env
+	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T api python scripts/smoke_upload_query.py
 
 docker-smoke-kafka-producer: ensure-env
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null
