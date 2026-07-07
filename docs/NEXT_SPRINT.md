@@ -34,7 +34,7 @@ retrieval quality, and production operations.
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add Kafka-enabled upload-to-query smoke coverage when queue-backed local mode is the default. | Medium |
 | `scripts/docker-smoke-monitoring.sh` | Host-side Docker smoke wrapper that validates Prometheus config/rule loading, Prometheus readiness, Grafana datasource/dashboard provisioning files, and Grafana health through the local Compose stack. | Add stricter dashboard API checks when Grafana auth handling is settled for local automation. | Medium |
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
-| `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle, query latency, retrieval lifecycle, retrieval latency, retrieval result counts, and LLM provider circuit-breaker health metrics. | Add dashboard-oriented metrics for ingestion, indexing, LLM cost, and worker queues as those slices land. | High |
+| `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle, query latency, retrieval lifecycle, retrieval latency, retrieval result counts, LLM provider circuit-breaker health, and worker lifecycle metrics. | Add dashboard-oriented metrics for LLM cost and broader worker queue health as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
 | `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, optional Kafka `ingestion.parse` scheduling, and document-scoped ingestion job status endpoints. | Add resumable/streaming large-file upload, idempotency key handling, and stronger MIME validation. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
@@ -74,9 +74,9 @@ retrieval quality, and production operations.
 | `src/agentic_rag/retrieval/hybrid_search.py` | Service-level hybrid retrieval that forwards source, metadata, tag, date, tenant, workspace, document, and ACL filters to BM25 and vector retrieval, deduplicates by chunk ID, combines candidates with rank-based scoring, and reranks the merged candidates. | Add hybrid retrieval quality tests as ranking behavior expands. | High |
 | `src/agentic_rag/retrieval/reranker.py` | Deterministic provider-neutral reranker that scores authorized candidates against the query and preserves original retrieval score/source metadata. | Add model-backed reranker integration and latency/quality metrics. | High |
 | `src/agentic_rag/retrieval/context_builder.py` | Builds safe context from authorized retrieval candidates. | Add adjacent chunk grouping, stronger token estimation, citation ordering, context compression, and optional per-document context caps. | High |
-| `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop that can poll pending chunks or consume `ingestion.index` when Kafka consuming is enabled. | Add worker leases, retry/DLQ behavior, graceful shutdown, and per-tenant indexing quotas. | High |
+| `src/agentic_rag/workers/indexing.py` | Local BM25 indexing worker loop that can poll pending chunks, consume `ingestion.index` when Kafka consuming is enabled, and record low-cardinality worker lifecycle metrics. | Add worker leases, retry/DLQ behavior, graceful shutdown, and per-tenant indexing quotas. | High |
 | `src/agentic_rag/workers/embedding.py` | Local selective embedding worker that finds ready chunks missing current embeddings, writes pgvector rows through embedding CRUD, and can consume `ingestion.embed` when Kafka consuming is enabled. | Add worker leases, retry/DLQ behavior, per-tenant quotas, and full local smoke tests against PostgreSQL/pgvector. | High |
-| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, renews the lease between processing stages, parses text uploads, writes chunks, emits `ingestion.embed` and `ingestion.index` scheduling events through a configured Kafka publisher, clears locks on completion/failure, emits retry/DLQ envelopes, and can consume `ingestion.parse` and `retry.ingestion` when Kafka consuming is enabled. | Add stronger shutdown handling, per-tenant ingestion quotas, and worker lifecycle metrics. | High |
+| `src/agentic_rag/workers/ingestion.py` | Local ingestion worker that claims jobs with a DB lease, renews the lease between processing stages, parses text uploads, writes chunks, emits `ingestion.embed` and `ingestion.index` scheduling events through a configured Kafka publisher, clears locks on completion/failure, emits retry/DLQ envelopes, records low-cardinality worker lifecycle metrics, and can consume `ingestion.parse` and `retry.ingestion` when Kafka consuming is enabled. | Add stronger shutdown handling and per-tenant ingestion quotas. | High |
 | `src/agentic_rag/storage/object_store.py` | S3-compatible object storage client. | Add bucket readiness check, streaming upload integration, object metadata lookup, presigned URLs, multipart upload, server-side encryption options, and lifecycle policy notes. | High |
 | `src/agentic_rag/shared/schemas/common.py` | Common API schema primitives. | Add pagination, error response, sort, filter, request ID, and batch operation response models. | Medium |
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
@@ -120,6 +120,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-07-07 | Added low-cardinality ingestion and indexing worker lifecycle metrics for throughput, failures, retries, DLQ events, chunk counts, latency, and queue lag. |
 | 2026-07-07 | Updated upload-to-query smoke coverage to poll document-scoped ingestion job status before `/query`. |
 | 2026-07-07 | Added document-scoped ingestion job status API coverage for uploaded documents. |
 | 2026-07-07 | Added Docker-backed upload-to-query smoke coverage through API upload, ingestion, BM25 indexing, and `/query`. |
@@ -181,7 +182,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add ingestion and indexing worker lifecycle metrics for job throughput, failures, retries, and queue lag. |
+| 1 | Add dashboard panels and alert rules for worker failures, retry/DLQ events, and queue lag. |
 
 ## Lowest Priority Final Polish
 

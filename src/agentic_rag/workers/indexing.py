@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from functools import partial
 from typing import Optional, cast
 from uuid import UUID
@@ -9,6 +10,12 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from agentic_rag.monitoring.metrics import (
+    WORKER_ITEM_TOTAL,
+    WORKER_JOB_LATENCY_SECONDS,
+    WORKER_JOB_LIFECYCLE_TOTAL,
+    WORKER_QUEUE_LAG_SECONDS,
+)
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.indexing import (
     list_chunks_pending_bm25_index,
@@ -26,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 INDEXING_CONSUMER_ID = "indexing-worker-consumer"
+INDEXING_WORKER_ID = "indexing-worker"
+INDEXING_JOB_TYPE = "bm25_indexing"
+INDEXING_METRIC_SOURCES = {"direct", "db_poll", "index_event"}
 
 
 def process_bm25_index_batch(
@@ -35,11 +45,14 @@ def process_bm25_index_batch(
     tenant_id: Optional[str] = None,
     document_id: Optional[UUID] = None,
     chunk_ids: Optional[list[UUID]] = None,
+    source: str = "direct",
 ) -> int:
     logger.info(
         f"[IndexingWorker] Processing BM25 index batch tenant={tenant_id} "
         f"document={document_id} chunk_count={len(chunk_ids or [])}"
     )
+    started_at = time.perf_counter()
+    metric_source = source if source in INDEXING_METRIC_SOURCES else "direct"
     search_client = search_client or OpenSearchClient()
     index_name = search_client.index_name
 
@@ -55,6 +68,38 @@ def process_bm25_index_batch(
         logger.info("[IndexingWorker] No chunks pending BM25 index")
         return 0
 
+    WORKER_JOB_LIFECYCLE_TOTAL.labels(
+        worker=INDEXING_WORKER_ID,
+        job_type=INDEXING_JOB_TYPE,
+        status="started",
+    ).inc()
+    queued_at = min(
+        (
+            chunk.updated_at or chunk.created_at
+            for chunk in chunks
+            if chunk.updated_at or chunk.created_at
+        ),
+        default=None,
+    )
+    if queued_at:
+        if queued_at.tzinfo is None:
+            queued_at = queued_at.replace(tzinfo=timezone.utc)
+        queue_lag_seconds = max(
+            0.0,
+            (datetime.now(timezone.utc) - queued_at).total_seconds(),
+        )
+        WORKER_QUEUE_LAG_SECONDS.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            source=metric_source,
+        ).observe(queue_lag_seconds)
+    WORKER_ITEM_TOTAL.labels(
+        worker=INDEXING_WORKER_ID,
+        job_type=INDEXING_JOB_TYPE,
+        item_type="chunk",
+        status="selected",
+    ).inc(len(chunks))
+
     try:
         search_client.ensure_chunk_index(index_name)
         indexed_count = search_client.bulk_index_chunks(chunks)
@@ -65,6 +110,23 @@ def process_bm25_index_batch(
                 index_name=index_name,
             )
 
+        latency_seconds = time.perf_counter() - started_at
+        WORKER_JOB_LIFECYCLE_TOTAL.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            status="completed",
+        ).inc()
+        WORKER_JOB_LATENCY_SECONDS.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            status="completed",
+        ).observe(latency_seconds)
+        WORKER_ITEM_TOTAL.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            item_type="chunk",
+            status="indexed",
+        ).inc(indexed_count)
         logger.info(f"[IndexingWorker] Indexed {indexed_count} chunks into BM25")
         return indexed_count
 
@@ -76,6 +138,23 @@ def process_bm25_index_batch(
                 chunk=chunk,
                 error_message=str(e),
             )
+        latency_seconds = time.perf_counter() - started_at
+        WORKER_JOB_LIFECYCLE_TOTAL.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            status="failed",
+        ).inc()
+        WORKER_JOB_LATENCY_SECONDS.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            status="failed",
+        ).observe(latency_seconds)
+        WORKER_ITEM_TOTAL.labels(
+            worker=INDEXING_WORKER_ID,
+            job_type=INDEXING_JOB_TYPE,
+            item_type="chunk",
+            status="failed",
+        ).inc(len(chunks))
         return 0
 
 
@@ -87,6 +166,7 @@ def run_indexing_worker_once(
         indexed_count = process_bm25_index_batch(
             db=db,
             search_client=search_client,
+            source="db_poll",
         )
         return indexed_count > 0
 
@@ -128,6 +208,7 @@ def handle_indexing_event(
             tenant_id=envelope.tenant_id,
             document_id=payload.document_id,
             chunk_ids=payload.chunk_ids,
+            source="index_event",
         )
         logger.info(
             f"[IndexingWorker] Handled indexing event event_id={envelope.event_id} "

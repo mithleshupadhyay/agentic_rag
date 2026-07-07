@@ -7,6 +7,12 @@ from sqlalchemy.orm import Session
 
 import agentic_rag.workers.indexing as indexing_worker_module
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.monitoring.metrics import (
+    WORKER_ITEM_TOTAL,
+    WORKER_JOB_LATENCY_SECONDS,
+    WORKER_JOB_LIFECYCLE_TOTAL,
+    WORKER_QUEUE_LAG_SECONDS,
+)
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import create_document
 from agentic_rag.shared.db.crud.ingestion import replace_document_chunks
@@ -39,6 +45,14 @@ class FakeSearchClient:
         self.indexed_chunks.extend(chunks)
         assert index_name is None
         return len(chunks)
+
+
+def counter_value(counter, **labels) -> float:
+    return counter.labels(**labels)._value.get()
+
+
+def histogram_count(histogram, **labels) -> float:
+    return sum(bucket.get() for bucket in histogram.labels(**labels)._buckets)
 
 
 @pytest.fixture()
@@ -111,6 +125,37 @@ def add_ready_chunk(db: Session) -> DocumentChunk:
 def test_process_bm25_index_batch_indexes_pending_chunk(db: Session) -> None:
     chunk = add_ready_chunk(db)
     search_client = FakeSearchClient()
+    lifecycle_labels = {
+        "worker": "indexing-worker",
+        "job_type": "bm25_indexing",
+    }
+    completed_before = counter_value(
+        WORKER_JOB_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="completed",
+    )
+    latency_before = histogram_count(
+        WORKER_JOB_LATENCY_SECONDS,
+        **lifecycle_labels,
+        status="completed",
+    )
+    queue_lag_before = histogram_count(
+        WORKER_QUEUE_LAG_SECONDS,
+        **lifecycle_labels,
+        source="direct",
+    )
+    selected_before = counter_value(
+        WORKER_ITEM_TOTAL,
+        **lifecycle_labels,
+        item_type="chunk",
+        status="selected",
+    )
+    indexed_before = counter_value(
+        WORKER_ITEM_TOTAL,
+        **lifecycle_labels,
+        item_type="chunk",
+        status="indexed",
+    )
 
     indexed_count = process_bm25_index_batch(
         db=db,
@@ -125,6 +170,48 @@ def test_process_bm25_index_batch_indexes_pending_chunk(db: Session) -> None:
     assert stored_chunk.bm25_index_status == "indexed"
     assert stored_chunk.bm25_index_name == "chunks-test"
     assert stored_chunk.bm25_index_content_hash == "hash-1"
+    assert (
+        counter_value(
+            WORKER_JOB_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="completed",
+        )
+        == completed_before + 1
+    )
+    assert (
+        histogram_count(
+            WORKER_JOB_LATENCY_SECONDS,
+            **lifecycle_labels,
+            status="completed",
+        )
+        == latency_before + 1
+    )
+    assert (
+        histogram_count(
+            WORKER_QUEUE_LAG_SECONDS,
+            **lifecycle_labels,
+            source="direct",
+        )
+        == queue_lag_before + 1
+    )
+    assert (
+        counter_value(
+            WORKER_ITEM_TOTAL,
+            **lifecycle_labels,
+            item_type="chunk",
+            status="selected",
+        )
+        == selected_before + 1
+    )
+    assert (
+        counter_value(
+            WORKER_ITEM_TOTAL,
+            **lifecycle_labels,
+            item_type="chunk",
+            status="indexed",
+        )
+        == indexed_before + 1
+    )
 
 
 def test_process_bm25_index_batch_filters_event_chunk_ids(db: Session) -> None:
@@ -173,6 +260,21 @@ def test_process_bm25_index_batch_filters_event_chunk_ids(db: Session) -> None:
 def test_process_bm25_index_batch_marks_chunks_failed_on_error(db: Session) -> None:
     chunk = add_ready_chunk(db)
     search_client = FakeSearchClient(fail=True)
+    lifecycle_labels = {
+        "worker": "indexing-worker",
+        "job_type": "bm25_indexing",
+    }
+    failed_before = counter_value(
+        WORKER_JOB_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="failed",
+    )
+    failed_chunks_before = counter_value(
+        WORKER_ITEM_TOTAL,
+        **lifecycle_labels,
+        item_type="chunk",
+        status="failed",
+    )
 
     indexed_count = process_bm25_index_batch(
         db=db,
@@ -184,6 +286,23 @@ def test_process_bm25_index_batch_marks_chunks_failed_on_error(db: Session) -> N
     assert indexed_count == 0
     assert stored_chunk.bm25_index_status == "failed"
     assert "OpenSearch unavailable" in stored_chunk.bm25_index_error
+    assert (
+        counter_value(
+            WORKER_JOB_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="failed",
+        )
+        == failed_before + 1
+    )
+    assert (
+        counter_value(
+            WORKER_ITEM_TOTAL,
+            **lifecycle_labels,
+            item_type="chunk",
+            status="failed",
+        )
+        == failed_chunks_before + 1
+    )
 
 
 def test_handle_indexing_event_processes_scoped_chunks(

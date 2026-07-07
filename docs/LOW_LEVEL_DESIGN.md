@@ -723,8 +723,9 @@ storage is active. Redis failures, invalid cache payloads, and cache write
 failures are logged and fall back to the normal retrieval path without failing
 the query.
 
-Current query metrics are defined in `src/agentic_rag/monitoring/metrics.py`
-and exposed through the existing `/metrics` endpoint:
+Current low-cardinality metrics are defined in
+`src/agentic_rag/monitoring/metrics.py` and exposed through the existing
+`/metrics` endpoint:
 
 ```text
 agentic_rag_query_lifecycle_total
@@ -746,12 +747,44 @@ agentic_rag_llm_provider_failure_count
 agentic_rag_llm_provider_retry_after_seconds
 - Labels: provider, model
 - Tracks remaining retry delay while a provider/model circuit is open
+
+agentic_rag_retrieval_lifecycle_total
+- Labels: status, retrieval_strategy
+- Tracks retrieval completion, denial, and failure events
+
+agentic_rag_retrieval_latency_seconds
+- Labels: status, retrieval_strategy
+- Observed for completed, denied, and failed retrieval paths
+
+agentic_rag_retrieval_result_total
+- Labels: retrieval_strategy, result
+- Tracks returned, skipped, and deduplicated retrieval result counts
+
+agentic_rag_worker_job_lifecycle_total
+- Labels: worker, job_type, status
+- Tracks worker job start, completion, failure, and lease-loss events
+
+agentic_rag_worker_job_latency_seconds
+- Labels: worker, job_type, status
+- Observed for completed, failed, and lease-loss worker paths
+
+agentic_rag_worker_queue_lag_seconds
+- Labels: worker, job_type, source
+- Tracks how long DB-polled or event-triggered work waited before processing
+
+agentic_rag_worker_item_total
+- Labels: worker, job_type, item_type, status
+- Tracks chunk counts selected, created, indexed, or failed by workers
+
+agentic_rag_worker_retry_lifecycle_total
+- Labels: worker, job_type, status, topic
+- Tracks retry scheduling, DLQ recording, and failure-event publish failures
 ```
 
-The query and LLM provider metrics intentionally exclude tenant IDs, user IDs,
-workspace IDs, request IDs, agent run IDs, raw query text, prompts, document
-identifiers, chunk identifiers, and provider credentials to avoid
-high-cardinality metrics and sensitive data exposure.
+The query, retrieval, LLM provider, and worker metrics intentionally exclude
+tenant IDs, user IDs, workspace IDs, request IDs, agent run IDs, job IDs, raw
+query text, prompts, document identifiers, chunk identifiers, and provider
+credentials to avoid high-cardinality metrics and sensitive data exposure.
 
 The first dashboard and alert artifacts are:
 

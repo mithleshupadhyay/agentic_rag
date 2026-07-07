@@ -8,6 +8,13 @@ from sqlalchemy.orm import Session
 
 import agentic_rag.workers.ingestion as ingestion_worker_module
 from agentic_rag.core.models.user_context import UserContext
+from agentic_rag.monitoring.metrics import (
+    WORKER_ITEM_TOTAL,
+    WORKER_JOB_LATENCY_SECONDS,
+    WORKER_JOB_LIFECYCLE_TOTAL,
+    WORKER_QUEUE_LAG_SECONDS,
+    WORKER_RETRY_LIFECYCLE_TOTAL,
+)
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import (
     attach_document_object,
@@ -58,6 +65,14 @@ class FakeEventPublisher:
 
     def __call__(self, topic: str, envelope: EventEnvelope) -> None:
         self.published.append((topic, envelope))
+
+
+def counter_value(counter, **labels) -> float:
+    return counter.labels(**labels)._value.get()
+
+
+def histogram_count(histogram, **labels) -> float:
+    return sum(bucket.get() for bucket in histogram.labels(**labels)._buckets)
 
 
 @pytest.fixture()
@@ -165,6 +180,31 @@ def test_process_ingestion_job_reads_object_and_stores_chunks(db: Session) -> No
         b"# Security Policy\n\nOnly authorized users can read this policy.\n"
         b"Every document must be tenant scoped."
     )
+    lifecycle_labels = {
+        "worker": "ingestion-worker",
+        "job_type": "document_ingestion",
+    }
+    completed_before = counter_value(
+        WORKER_JOB_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="completed",
+    )
+    latency_before = histogram_count(
+        WORKER_JOB_LATENCY_SECONDS,
+        **lifecycle_labels,
+        status="completed",
+    )
+    queue_lag_before = histogram_count(
+        WORKER_QUEUE_LAG_SECONDS,
+        **lifecycle_labels,
+        source="direct",
+    )
+    chunks_before = counter_value(
+        WORKER_ITEM_TOTAL,
+        **lifecycle_labels,
+        item_type="chunk",
+        status="created",
+    )
 
     processed_job = process_ingestion_job(
         db=db,
@@ -188,6 +228,39 @@ def test_process_ingestion_job_reads_object_and_stores_chunks(db: Session) -> No
     assert stored_chunks[0].content.startswith("# Security Policy")
     assert stored_chunks[0].acl.allowed_user_ids == ["user-1"]
     assert object_store.read_keys == [document.object_key]
+    assert (
+        counter_value(
+            WORKER_JOB_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="completed",
+        )
+        == completed_before + 1
+    )
+    assert (
+        histogram_count(
+            WORKER_JOB_LATENCY_SECONDS,
+            **lifecycle_labels,
+            status="completed",
+        )
+        == latency_before + 1
+    )
+    assert (
+        histogram_count(
+            WORKER_QUEUE_LAG_SECONDS,
+            **lifecycle_labels,
+            source="direct",
+        )
+        == queue_lag_before + 1
+    )
+    assert (
+        counter_value(
+            WORKER_ITEM_TOTAL,
+            **lifecycle_labels,
+            item_type="chunk",
+            status="created",
+        )
+        == chunks_before + len(stored_chunks)
+    )
 
 
 def test_process_ingestion_job_publishes_embedding_and_indexing_events(
@@ -376,6 +449,21 @@ def test_process_ingestion_job_publishes_retry_event_for_retryable_failure(
     )
     object_store = FakeObjectStore(b"%PDF-1.7")
     event_publisher = FakeEventPublisher()
+    lifecycle_labels = {
+        "worker": "ingestion-worker",
+        "job_type": "document_ingestion",
+    }
+    failed_before = counter_value(
+        WORKER_JOB_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="failed",
+    )
+    retry_before = counter_value(
+        WORKER_RETRY_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="retry_scheduled",
+        topic=RETRY_INGESTION,
+    )
 
     process_ingestion_job(
         db=db,
@@ -407,6 +495,23 @@ def test_process_ingestion_job_publishes_retry_event_for_retryable_failure(
     assert envelope.payload["max_attempts"] == stored_job.max_retries
     assert envelope.payload["error_type"] == "ValueError"
     assert envelope.payload["metadata"]["worker_id"] == "ingestion-worker"
+    assert (
+        counter_value(
+            WORKER_JOB_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="failed",
+        )
+        == failed_before + 1
+    )
+    assert (
+        counter_value(
+            WORKER_RETRY_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="retry_scheduled",
+            topic=RETRY_INGESTION,
+        )
+        == retry_before + 1
+    )
 
 
 def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
@@ -421,6 +526,16 @@ def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
     db.commit()
     object_store = FakeObjectStore(b"%PDF-1.7")
     event_publisher = FakeEventPublisher()
+    lifecycle_labels = {
+        "worker": "ingestion-worker",
+        "job_type": "document_ingestion",
+    }
+    dlq_before = counter_value(
+        WORKER_RETRY_LIFECYCLE_TOTAL,
+        **lifecycle_labels,
+        status="dlq_recorded",
+        topic=DLQ_INGESTION,
+    )
 
     process_ingestion_job(
         db=db,
@@ -444,6 +559,15 @@ def test_process_ingestion_job_publishes_dlq_event_when_retries_exhausted(
     assert envelope.payload["dlq_topic"] == DLQ_INGESTION
     assert envelope.payload["attempt"] == stored_job.max_retries
     assert envelope.payload["terminal_reason"] == "max_retries_exhausted"
+    assert (
+        counter_value(
+            WORKER_RETRY_LIFECYCLE_TOTAL,
+            **lifecycle_labels,
+            status="dlq_recorded",
+            topic=DLQ_INGESTION,
+        )
+        == dlq_before + 1
+    )
 
 
 def test_handle_ingestion_parse_event_claims_and_processes_queued_job(
@@ -469,6 +593,7 @@ def test_handle_ingestion_parse_event_claims_and_processes_queued_job(
         job: IngestionJob,
         object_store=None,
         event_publisher=None,
+        source: str = "direct",
     ) -> IngestionJob:
         processed_jobs.append((job.id, event_publisher))
         return job
@@ -551,6 +676,7 @@ def test_handle_ingestion_retry_event_claims_and_processes_retry_job(
         job: IngestionJob,
         object_store=None,
         event_publisher=None,
+        source: str = "direct",
     ) -> IngestionJob:
         processed_jobs.append((job.id, event_publisher))
         return job

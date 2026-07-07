@@ -12,6 +12,13 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from agentic_rag.monitoring.metrics import (
+    WORKER_ITEM_TOTAL,
+    WORKER_JOB_LATENCY_SECONDS,
+    WORKER_JOB_LIFECYCLE_TOTAL,
+    WORKER_QUEUE_LAG_SECONDS,
+    WORKER_RETRY_LIFECYCLE_TOTAL,
+)
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.ingestion import (
     claim_ingestion_job_by_id,
@@ -59,6 +66,8 @@ EventPublisher = Callable[[str, EventEnvelope], None]
 
 INGESTION_WORKER_ID = "ingestion-worker"
 INGESTION_CONSUMER_ID = "ingestion-worker-consumer"
+INGESTION_JOB_TYPE = "document_ingestion"
+INGESTION_METRIC_SOURCES = {"direct", "db_poll", "parse_event", "retry_event"}
 
 
 TEXT_FILE_EXTENSIONS = {
@@ -187,8 +196,29 @@ def process_ingestion_job(
     job: IngestionJob,
     object_store: Optional[ObjectStoreClient] = None,
     event_publisher: EventPublisher | None = None,
+    source: str = "direct",
 ) -> IngestionJob:
     logger.info(f"[IngestionWorker] Processing ingestion job {job.id}")
+    started_at = time.perf_counter()
+    metric_source = source if source in INGESTION_METRIC_SOURCES else "direct"
+    WORKER_JOB_LIFECYCLE_TOTAL.labels(
+        worker=INGESTION_WORKER_ID,
+        job_type=INGESTION_JOB_TYPE,
+        status="started",
+    ).inc()
+    if job.created_at:
+        queued_at = job.created_at
+        if queued_at.tzinfo is None:
+            queued_at = queued_at.replace(tzinfo=timezone.utc)
+        queue_lag_seconds = max(
+            0.0,
+            (datetime.now(timezone.utc) - queued_at).total_seconds(),
+        )
+        WORKER_QUEUE_LAG_SECONDS.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            source=metric_source,
+        ).observe(queue_lag_seconds)
     object_store = object_store or ObjectStoreClient()
     document = job.document
 
@@ -311,6 +341,23 @@ def process_ingestion_job(
                 )
 
         job = mark_ingestion_job_completed(db, job)
+        latency_seconds = time.perf_counter() - started_at
+        WORKER_JOB_LIFECYCLE_TOTAL.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            status="completed",
+        ).inc()
+        WORKER_JOB_LATENCY_SECONDS.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            status="completed",
+        ).observe(latency_seconds)
+        WORKER_ITEM_TOTAL.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            item_type="chunk",
+            status="created",
+        ).inc(len(stored_chunks))
         logger.info(
             f"[IngestionWorker] Completed ingestion job {job.id} "
             f"document={document.id} chunks={len(chunk_payloads)}"
@@ -323,6 +370,17 @@ def process_ingestion_job(
                 f"[IngestionWorker] Lost ingestion job lease {job.id}; "
                 "skipping failure update"
             )
+            latency_seconds = time.perf_counter() - started_at
+            WORKER_JOB_LIFECYCLE_TOTAL.labels(
+                worker=INGESTION_WORKER_ID,
+                job_type=INGESTION_JOB_TYPE,
+                status="lease_lost",
+            ).inc()
+            WORKER_JOB_LATENCY_SECONDS.labels(
+                worker=INGESTION_WORKER_ID,
+                job_type=INGESTION_JOB_TYPE,
+                status="lease_lost",
+            ).observe(latency_seconds)
             return job
 
         logger.exception(f"[IngestionWorker] Failed ingestion job {job.id}: {e}")
@@ -335,6 +393,17 @@ def process_ingestion_job(
         )
         if isinstance(document, Document):
             update_document_ingestion_status(db, document, "failed")
+        latency_seconds = time.perf_counter() - started_at
+        WORKER_JOB_LIFECYCLE_TOTAL.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            status="failed",
+        ).inc()
+        WORKER_JOB_LATENCY_SECONDS.labels(
+            worker=INGESTION_WORKER_ID,
+            job_type=INGESTION_JOB_TYPE,
+            status="failed",
+        ).observe(latency_seconds)
 
         if event_publisher:
             source_topic = INGESTION_PARSE
@@ -403,7 +472,24 @@ def process_ingestion_job(
             )
             try:
                 event_publisher(topic, envelope)
+                retry_status = (
+                    "retry_scheduled"
+                    if event_type == EventType.INGESTION_RETRY_SCHEDULED
+                    else "dlq_recorded"
+                )
+                WORKER_RETRY_LIFECYCLE_TOTAL.labels(
+                    worker=INGESTION_WORKER_ID,
+                    job_type=INGESTION_JOB_TYPE,
+                    status=retry_status,
+                    topic=topic,
+                ).inc()
             except Exception as publish_error:
+                WORKER_RETRY_LIFECYCLE_TOTAL.labels(
+                    worker=INGESTION_WORKER_ID,
+                    job_type=INGESTION_JOB_TYPE,
+                    status="publish_failed",
+                    topic=topic,
+                ).inc()
                 logger.exception(
                     f"[IngestionWorker] Failed to publish ingestion failure event "
                     f"job={job.id} topic={topic}: {publish_error}"
@@ -431,6 +517,7 @@ def run_ingestion_worker_once(
             job=job,
             object_store=object_store,
             event_publisher=event_publisher,
+            source="db_poll",
         )
         return True
 
@@ -477,6 +564,7 @@ def handle_ingestion_parse_event(
             job=job,
             object_store=object_store,
             event_publisher=event_publisher,
+            source="parse_event",
         )
         return True
 
@@ -530,6 +618,7 @@ def handle_ingestion_retry_event(
             job=job,
             object_store=object_store,
             event_publisher=event_publisher,
+            source="retry_event",
         )
         return True
 
