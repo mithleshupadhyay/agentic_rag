@@ -24,6 +24,10 @@ from agentic_rag.shared.db.crud.documents import (
     search_documents,
     update_document,
 )
+from agentic_rag.shared.db.crud.ingestion import (
+    get_ingestion_job,
+    list_ingestion_jobs_for_document,
+)
 from agentic_rag.shared.db.session import get_session
 from agentic_rag.shared.kafka.events import EventEnvelope, EventType, ParseDocumentPayload
 from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
@@ -41,6 +45,12 @@ from agentic_rag.shared.schemas.documents import (
     DocumentUpdateRequest,
     DocumentUploadResponse,
     FileMetadata,
+)
+from agentic_rag.shared.schemas.ingestion import (
+    IngestionJobRead,
+    IngestionJobSearchResponse,
+    IngestionJobStatus,
+    IngestionStage,
 )
 from agentic_rag.storage.object_store import ObjectStoreClient
 
@@ -372,6 +382,111 @@ def get_document_endpoint(
 
     logger.info(f"[DocumentAPI] Get document allowed {document_id}")
     return DocumentRead.model_validate(document)
+
+
+@router.get(
+    "/{document_id}/ingestion-jobs",
+    response_model=IngestionJobSearchResponse,
+)
+def list_document_ingestion_jobs_endpoint(
+    document_id: UUID,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=500),
+    status: IngestionJobStatus | None = None,
+    current_stage: IngestionStage | None = None,
+    db: Session = Depends(get_session),
+    user_ctx: UserContext = Depends(require_scope("documents:read")),
+) -> IngestionJobSearchResponse:
+    logger.info(
+        f"[DocumentAPI] List ingestion jobs document={document_id} "
+        f"tenant={user_ctx.tenant_id}, user={user_ctx.id}, page={page}, size={size}"
+    )
+
+    document = get_document(
+        db=db,
+        id=document_id,
+        tenant_id=user_ctx.tenant_id,
+    )
+    if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for ingestion jobs"
+        )
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    require_document_permission(
+        user_context=user_ctx,
+        document=document,
+        action=PermissionAction.READ,
+    )
+
+    jobs, total = list_ingestion_jobs_for_document(
+        db=db,
+        tenant_id=user_ctx.tenant_id,
+        document_id=document_id,
+        skip=(page - 1) * size,
+        limit=size,
+        status=status.value if status else None,
+        current_stage=current_stage.value if current_stage else None,
+    )
+    logger.info(
+        f"[DocumentAPI] Listed {len(jobs)} ingestion jobs document={document_id} "
+        f"tenant={user_ctx.tenant_id}"
+    )
+    return IngestionJobSearchResponse(
+        items=[IngestionJobRead.model_validate(job) for job in jobs],
+        page=PageResponse(page=page, size=size, total=total),
+    )
+
+
+@router.get(
+    "/{document_id}/ingestion-jobs/{job_id}",
+    response_model=IngestionJobRead,
+)
+def get_document_ingestion_job_endpoint(
+    document_id: UUID,
+    job_id: UUID,
+    db: Session = Depends(get_session),
+    user_ctx: UserContext = Depends(require_scope("documents:read")),
+) -> IngestionJobRead:
+    logger.info(
+        f"[DocumentAPI] Get ingestion job {job_id} document={document_id} "
+        f"tenant={user_ctx.tenant_id}, user={user_ctx.id}"
+    )
+
+    document = get_document(
+        db=db,
+        id=document_id,
+        tenant_id=user_ctx.tenant_id,
+    )
+    if not document:
+        logger.warning(
+            f"[DocumentAPI] Document {document_id} not found for ingestion job {job_id}"
+        )
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    require_document_permission(
+        user_context=user_ctx,
+        document=document,
+        action=PermissionAction.READ,
+    )
+
+    job = get_ingestion_job(
+        db=db,
+        tenant_id=user_ctx.tenant_id,
+        job_id=job_id,
+        document_id=document_id,
+    )
+    if not job:
+        logger.warning(
+            f"[DocumentAPI] Ingestion job {job_id} not found "
+            f"document={document_id} tenant={user_ctx.tenant_id}"
+        )
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
+
+    logger.info(
+        f"[DocumentAPI] Get ingestion job allowed {job_id} document={document_id}"
+    )
+    return IngestionJobRead.model_validate(job)
 
 
 @router.patch("/{document_id}", response_model=DocumentRead)

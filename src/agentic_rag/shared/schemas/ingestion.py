@@ -50,10 +50,18 @@ class IngestionJobRead(ORMModel):
     status: IngestionJobStatus
     current_stage: IngestionStage
     retry_count: int = Field(default=0, ge=0)
+    max_retries: int = Field(default=3, ge=0)
     error_type: str | None = None
     error_message: str | None = None
+    locked_by: str | None = None
+    locked_at: datetime | None = None
+    lease_expires_at: datetime | None = None
+    next_retry_at: datetime | None = None
     idempotency_key: str | None = None
+    metadata: JsonObject = Field(default_factory=dict, validation_alias="metadata_")
     created_by: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -75,4 +83,3 @@ class IngestionJobSearchRequest(APIModel):
 class IngestionJobSearchResponse(APIModel):
     items: list[IngestionJobRead]
     page: PageResponse
-

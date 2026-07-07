@@ -322,6 +322,107 @@ def test_upload_document_endpoint_deletes_object_when_job_creation_fails(
     assert fake_store.deleted == [fake_store.uploads[0]["object_key"]]
 
 
+def test_list_and_get_document_ingestion_jobs_endpoint_returns_upload_job(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+    upload_response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+        data={
+            "workspace_id": "workspace-a",
+            "title": "Uploaded Security Policy",
+            "metadata_json": '{"department": "security"}',
+            "idempotency_key": "upload-security-1",
+        },
+    )
+    upload_body = upload_response.json()
+    document_id = upload_body["document"]["id"]
+    job_id = upload_body["ingestion_job_id"]
+
+    list_response = client.get(
+        f"/documents/{document_id}/ingestion-jobs"
+        "?status=queued&current_stage=created"
+    )
+    get_response = client.get(f"/documents/{document_id}/ingestion-jobs/{job_id}")
+
+    assert list_response.status_code == 200
+    list_body = list_response.json()
+    assert list_body["page"] == {"page": 1, "size": 50, "total": 1}
+    assert len(list_body["items"]) == 1
+    list_item = list_body["items"][0]
+    assert list_item["id"] == job_id
+    assert list_item["document_id"] == document_id
+    assert list_item["tenant_id"] == "tenant-a"
+    assert list_item["workspace_id"] == "workspace-a"
+    assert list_item["source_type"] == "upload"
+    assert list_item["status"] == "queued"
+    assert list_item["current_stage"] == "created"
+    assert list_item["retry_count"] == 0
+    assert list_item["max_retries"] == 3
+    assert list_item["metadata"]["file_name"] == "security.txt"
+    assert list_item["locked_by"] is None
+    assert list_item["next_retry_at"] is None
+
+    assert get_response.status_code == 200
+    assert get_response.json()["id"] == job_id
+
+
+def test_document_ingestion_jobs_endpoint_requires_read_scope(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+    upload_response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+    )
+    document_id = upload_response.json()["document"]["id"]
+
+    set_current_user(
+        client,
+        user_id="owner-1",
+        scopes=["documents:write"],
+    )
+    response = client.get(f"/documents/{document_id}/ingestion-jobs")
+
+    assert response.status_code == 403
+
+
+def test_document_ingestion_jobs_endpoint_enforces_document_acl_and_tenant(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_store = FakeObjectStore()
+    monkeypatch.setattr(
+        "agentic_rag.api.documents.ObjectStoreClient",
+        lambda: fake_store,
+    )
+    upload_response = client.post(
+        "/documents/upload",
+        files={"file": ("security.txt", b"security policy", "text/plain")},
+    )
+    document_id = upload_response.json()["document"]["id"]
+
+    set_current_user(client, user_id="user-2")
+    denied_response = client.get(f"/documents/{document_id}/ingestion-jobs")
+
+    set_current_user(client, user_id="owner-2", tenant_id="tenant-b")
+    cross_tenant_response = client.get(f"/documents/{document_id}/ingestion-jobs")
+
+    assert denied_response.status_code == 403
+    assert cross_tenant_response.status_code == 404
+
+
 def test_create_document_endpoint_requires_write_scope(client: TestClient) -> None:
     set_current_user(
         client,

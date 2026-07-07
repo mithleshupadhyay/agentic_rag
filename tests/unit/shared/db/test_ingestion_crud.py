@@ -17,7 +17,9 @@ from agentic_rag.shared.db.crud.documents import (
 from agentic_rag.shared.db.crud.ingestion import (
     claim_ingestion_job_by_id,
     claim_next_ingestion_job,
+    get_ingestion_job,
     get_next_queued_ingestion_job,
+    list_ingestion_jobs_for_document,
     mark_ingestion_job_completed,
     mark_ingestion_job_failed,
     mark_ingestion_job_running,
@@ -160,6 +162,68 @@ def test_ingestion_job_status_transitions(db: Session) -> None:
     assert completed_job.completed_at is not None
     assert completed_job.locked_by is None
     assert completed_job.lease_expires_at is None
+
+
+def test_get_and_list_ingestion_jobs_are_tenant_and_document_scoped(
+    db: Session,
+) -> None:
+    user_context, document, job = create_uploaded_document(db)
+    other_document, other_job = create_uploaded_document_for_user(
+        db=db,
+        user_context=user_context,
+        title="other-policy",
+    )
+
+    fetched_job = get_ingestion_job(
+        db=db,
+        tenant_id="tenant-a",
+        job_id=job.id,
+        document_id=document.id,
+    )
+    cross_tenant_job = get_ingestion_job(
+        db=db,
+        tenant_id="tenant-b",
+        job_id=job.id,
+        document_id=document.id,
+    )
+    wrong_document_job = get_ingestion_job(
+        db=db,
+        tenant_id="tenant-a",
+        job_id=job.id,
+        document_id=other_document.id,
+    )
+    jobs, total = list_ingestion_jobs_for_document(
+        db=db,
+        tenant_id="tenant-a",
+        document_id=document.id,
+        skip=0,
+        limit=10,
+    )
+    completed_jobs, completed_total = list_ingestion_jobs_for_document(
+        db=db,
+        tenant_id="tenant-a",
+        document_id=document.id,
+        skip=0,
+        limit=10,
+        status="completed",
+    )
+    other_document_jobs, other_document_total = list_ingestion_jobs_for_document(
+        db=db,
+        tenant_id="tenant-a",
+        document_id=other_document.id,
+        skip=0,
+        limit=10,
+    )
+
+    assert fetched_job.id == job.id
+    assert cross_tenant_job is None
+    assert wrong_document_job is None
+    assert [listed_job.id for listed_job in jobs] == [job.id]
+    assert total == 1
+    assert completed_jobs == []
+    assert completed_total == 0
+    assert [listed_job.id for listed_job in other_document_jobs] == [other_job.id]
+    assert other_document_total == 1
 
 
 def test_claim_next_ingestion_job_claims_oldest_queued_job(db: Session) -> None:

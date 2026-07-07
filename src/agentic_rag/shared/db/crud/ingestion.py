@@ -15,6 +15,74 @@ from agentic_rag.shared.db.models import ChunkAcl, Document, DocumentChunk, Inge
 logger = logging.getLogger(__name__)
 
 
+def get_ingestion_job(
+    db: Session,
+    tenant_id: str,
+    job_id: UUID,
+    document_id: UUID | None = None,
+) -> Optional[IngestionJob]:
+    logger.info(
+        f"[DB] Fetching ingestion job {job_id} tenant={tenant_id} "
+        f"document={document_id}"
+    )
+    query = (
+        db.query(IngestionJob)
+        .options(selectinload(IngestionJob.document))
+        .filter(
+            IngestionJob.id == job_id,
+            IngestionJob.tenant_id == tenant_id,
+        )
+    )
+    if document_id:
+        query = query.filter(IngestionJob.document_id == document_id)
+
+    job = query.first()
+    if job:
+        logger.info(f"[DB] Found ingestion job {job_id} tenant={tenant_id}")
+    else:
+        logger.warning(f"[DB] Ingestion job {job_id} not found tenant={tenant_id}")
+    return job
+
+
+def list_ingestion_jobs_for_document(
+    db: Session,
+    tenant_id: str,
+    document_id: UUID,
+    skip: int = 0,
+    limit: int = 50,
+    status: str | None = None,
+    current_stage: str | None = None,
+) -> tuple[list[IngestionJob], int]:
+    logger.info(
+        f"[DB] Listing ingestion jobs tenant={tenant_id} document={document_id} "
+        f"skip={skip} limit={limit} status={status} stage={current_stage}"
+    )
+    query = (
+        db.query(IngestionJob)
+        .filter(
+            IngestionJob.tenant_id == tenant_id,
+            IngestionJob.document_id == document_id,
+        )
+    )
+    if status:
+        query = query.filter(IngestionJob.status == status)
+    if current_stage:
+        query = query.filter(IngestionJob.current_stage == current_stage)
+
+    total = query.order_by(None).count()
+    jobs = (
+        query.order_by(IngestionJob.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    logger.info(
+        f"[DB] Listed {len(jobs)} ingestion jobs of total={total} "
+        f"tenant={tenant_id} document={document_id}"
+    )
+    return jobs, total
+
+
 def claim_next_ingestion_job(
     db: Session,
     worker_id: str,

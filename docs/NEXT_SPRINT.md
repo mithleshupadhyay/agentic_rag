@@ -36,7 +36,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/main.py` | Main FastAPI app entrypoint with request ID middleware, request duration logs, CORS, Prometheus metrics, router registration, and OpenAPI auth setup. | Add OpenTelemetry setup, graceful startup/shutdown checks, and explicit service lifecycle hooks as the stack grows. | High |
 | `src/agentic_rag/monitoring/metrics.py` | Shared Prometheus metric definitions for low-cardinality query lifecycle, query latency, retrieval lifecycle, retrieval latency, retrieval result counts, and LLM provider circuit-breaker health metrics. | Add dashboard-oriented metrics for ingestion, indexing, LLM cost, and worker queues as those slices land. | High |
 | `src/agentic_rag/api/health.py` | Health endpoint. | Expand to readiness checks for PostgreSQL, Redis, Kafka, OpenSearch, object storage, and LLM gateway without leaking secrets. | High |
-| `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, and optional Kafka `ingestion.parse` scheduling. | Add resumable/streaming large-file upload, idempotency key handling, stronger MIME validation, and ingestion status endpoints. | High |
+| `src/agentic_rag/api/documents.py` | Document API endpoints with upload support, object-store writes, ingestion job creation, optional Kafka `ingestion.parse` scheduling, and document-scoped ingestion job status endpoints. | Add resumable/streaming large-file upload, idempotency key handling, and stronger MIME validation. | High |
 | `src/agentic_rag/api/retrieval.py` | Protected retrieval API endpoints for BM25, vector, hybrid search, and reranking. | Add context-build endpoint, request IDs, latency logging, and integration smoke coverage against Docker OpenSearch and PostgreSQL/pgvector. | High |
 | `src/agentic_rag/api/query.py` | User-facing query endpoint that runs BM25 retrieval, context building, optional LLM answer synthesis, request-ID-aware logs, persisted query-run lookup/listing with status, verification-status, and created-at date filtering, query-run cancellation, verification metadata exposure, agent-runtime-backed SSE streaming with step and token events, and low-cardinality query metric recording. | Add dashboard panels and alert rules as query behavior expands; defer OpenAPI examples until final API polish. | High |
 | `src/agentic_rag/core/auth.py` | Auth token verification. | Add production OIDC hardening, JWKS cache, issuer/audience validation tests, role/group/scope mapping, and clear tenant resolution rules. | High |
@@ -53,7 +53,7 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/db/models/acl.py` | Document and chunk ACL models. | Add policy versioning, inherited ACLs, group expansion snapshots, deny rules, and efficient indexes for retrieval-time chunk filtering. | High |
 | `src/agentic_rag/shared/db/models/ingestion_jobs.py` | Ingestion job model with retry count, max retries, worker lock fields, lease expiry, and next retry timestamp for backoff scheduling. | Add stage timestamps, retry jitter fields if needed, dead-letter reason, source connector metadata, and batch ingestion grouping. | High |
 | `src/agentic_rag/shared/db/crud/documents.py` | Tenant-scoped document CRUD with chunk insertion support used by ingestion. | Add idempotent create-by-hash, pagination counts, stronger bulk status updates, lock-safe job updates, and retrieval-facing list queries. | High |
-| `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, exponential retry backoff, retry eligibility, and lock cleanup on completion/failure. | Add retry jitter, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
+| `src/agentic_rag/shared/db/crud/ingestion.py` | Ingestion job claim/status CRUD with DB-backed worker leases, lease renewal, expired lease reclaim, exponential retry backoff, retry eligibility, tenant/document-scoped status lookups, and lock cleanup on completion/failure. | Add retry jitter, DLQ handoff, stage duration tracking, and bulk worker observability queries. | High |
 | `src/agentic_rag/shared/db/crud/embeddings.py` | Tenant-scoped chunk embedding CRUD with idempotent pgvector writes, stale content-hash updates, dimension checks, missing-embedding chunk selection, event chunk filtering, and filtered vector similarity search. | Add vector-search integration coverage against PostgreSQL/pgvector, worker lease integration, model/version migration support, and high-volume batch tuning. | High |
 | `src/agentic_rag/shared/db/crud/indexing.py` | Selects and updates chunks for BM25 indexing with tenant, document, and event chunk filters. | Add retry backoff, stale failure recovery, per-tenant batching, index migration support, and bulk status updates for very large chunk tables. | High |
 | `src/agentic_rag/shared/db/crud/query_runs.py` | Tenant-scoped query run creation, completion, failure, cancellation, fetch, request-ID filtering, status filtering, verification-status filtering, created-at date filtering, retention cleanup for old terminal runs, safe metric defaults, and listing helpers. | Add admin search and cache/budget metadata updates. | High |
@@ -82,13 +82,13 @@ retrieval quality, and production operations.
 | `src/agentic_rag/shared/schemas/auth.py` | Auth and permission schemas. | Add tenant membership, workspace access, effective permissions, and token claim mapping schemas. | Medium |
 | `src/agentic_rag/shared/schemas/documents.py` | Document API schemas with upload and ingestion linkage. | Add bulk document operations, richer document status transitions, upload limits, and source connector metadata. | High |
 | `src/agentic_rag/shared/schemas/chunks.py` | Chunk API and internal schemas. | Add chunk create/read/search schemas, chunk ACL summaries, citation fields, token window metadata, and embedding status fields. | High |
-| `src/agentic_rag/shared/schemas/ingestion.py` | Ingestion schemas. | Add upload ingestion request, connector ingestion request, job progress response, retry response, and batch ingestion status response. | High |
+| `src/agentic_rag/shared/schemas/ingestion.py` | Ingestion schemas with job create/read/search contracts, retry metadata, lease timestamps, lifecycle timestamps, and job metadata exposure. | Add upload ingestion request, connector ingestion request, retry response, and batch ingestion status response. | High |
 | `src/agentic_rag/shared/schemas/retrieval.py` | Retrieval schemas. | Add metadata search, BM25 search, vector search, hybrid merge, reranker, citation, and ACL-filtered candidate schemas. | High |
 | `src/agentic_rag/shared/schemas/query.py` | Query API schemas with request/response, query cache metadata, query-run read/list, and stream event contracts. | Add grounded answer response, citation response, budget/timeout fields, and stricter typed stream event variants. | High |
 | `src/agentic_rag/shared/schemas/agent.py` | Agent runtime schemas for limits, state, step records, tool call records, checkpoint metadata, statuses, loop detection fields, and runtime streaming events. | Add persisted run lifecycle request/response schemas, transition validation fields, cancellation metadata, and API-facing stream event mapping when the runtime is wired into APIs. | High |
 | `src/agentic_rag/shared/schemas/llm.py` | LLM gateway schemas for chat completion, model metadata, embeddings, and budget decisions. | Add model routing, token budget, retry policy, prompt policy, and response safety metadata. | High |
 | `src/agentic_rag/shared/schemas/evaluation.py` | Evaluation schemas. | Add retrieval evaluation, answer faithfulness, citation accuracy, latency, cost, and regression test result schemas. | Medium |
-| `tests/unit/api/test_documents.py` | Document API tests, including upload behavior. | Add more authorization edge cases, idempotent upload tests, ingestion status tests, and large file validation tests. | High |
+| `tests/unit/api/test_documents.py` | Document API tests, including upload behavior, document ACL checks, tenant boundaries, and document-scoped ingestion job status endpoints. | Add more authorization edge cases, idempotent upload tests, and large file validation tests. | High |
 | `tests/unit/api/test_health.py` | Health API tests. | Add readiness dependency status tests and degraded/unhealthy response tests. | Medium |
 | `tests/unit/api/test_retrieval.py` | Retrieval API tests for BM25, vector, hybrid search, and rerank endpoints. | Add error mapping, empty-result behavior, mocked OpenSearch failures, and integration smoke tests for `/retrieval/bm25-search`, `/retrieval/vector-search`, `/retrieval/hybrid-search`, and `/retrieval/rerank`. | High |
 | `tests/unit/api/test_query.py` | Query API tests, including query-run lookup/listing access checks, admin query-run listing coverage, query-run cancellation authorization, agent runtime streaming response tests, token event tests, query lifecycle metric assertions, LLM synthesis persistence coverage, and synthesis fallback persistence coverage. | Keep coverage updated alongside production query behavior changes. | High |
@@ -120,6 +120,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-07-07 | Added document-scoped ingestion job status API coverage for uploaded documents. |
 | 2026-07-07 | Added Docker-backed upload-to-query smoke coverage through API upload, ingestion, BM25 indexing, and `/query`. |
 | 2026-07-07 | Added Docker-backed OpenSearch smoke coverage for BM25 retrieval. |
 | 2026-07-07 | Added Docker-backed PostgreSQL/pgvector smoke coverage for vector retrieval. |
@@ -179,7 +180,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add ingestion job status API coverage for uploaded documents. |
+| 1 | Update upload-to-query smoke coverage to poll the ingestion job status endpoint before `/query`. |
 
 ## Lowest Priority Final Polish
 
