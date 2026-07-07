@@ -117,6 +117,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-07-07 | Added result deduplication to vector retrieval before applying the response limit. |
 | 2026-06-05 | Added source, metadata, tag, and date filter forwarding to hybrid retrieval. |
 | 2026-06-05 | Added source, metadata, tag, and date filters to vector retrieval. |
 | 2026-06-05 | Added BM25 query cache lookup and write metadata to query responses and persisted response payloads. |
@@ -172,7 +173,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add result deduplication to vector retrieval. |
+| 1 | Add Docker-backed PostgreSQL/pgvector smoke coverage for vector retrieval. |
 
 ## Lowest Priority Final Polish
 

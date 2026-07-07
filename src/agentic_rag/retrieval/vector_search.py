@@ -259,6 +259,7 @@ def search_vector_chunks(
             f"({embedding_response.dimension}!={settings.embedding_dimension})."
         )
 
+    vector_search_limit = min(200, max(limit, limit * 3))
     search_results = search_similar_chunks_by_embedding(
         db=db,
         tenant_id=user_context.tenant_id,
@@ -266,7 +267,7 @@ def search_vector_chunks(
         embedding_model=embedding_response.model,
         vector_version=settings.embedding_vector_version,
         embedding_dimension=settings.embedding_dimension,
-        limit=limit,
+        limit=vector_search_limit,
         min_similarity=min_similarity,
         workspace_id=user_context.workspace_id or filters.workspace_id,
         document_ids=filters.document_ids,
@@ -277,51 +278,81 @@ def search_vector_chunks(
         user_context=user_context,
     )
 
-    candidates: list[CandidateChunk] = []
-    for result in search_results:
+    deduped_candidates: dict[str, CandidateChunk] = {}
+    dedupe_order: dict[str, int] = {}
+    dedupe_distances: dict[str, float] = {}
+    for result_index, result in enumerate(search_results):
         chunk = result.chunk
         document = chunk.document
         score = max(result.similarity, 0.0)
-        candidates.append(
-            CandidateChunk(
-                chunk_id=chunk.id,
+        candidate = CandidateChunk(
+            chunk_id=chunk.id,
+            document_id=chunk.document_id,
+            content=chunk.content,
+            score=score,
+            source=RetrievalTool.VECTOR_SEARCH,
+            metadata={
+                "workspace_id": chunk.workspace_id,
+                "chunk_index": chunk.chunk_index,
+                "token_count": chunk.token_count,
+                "start_offset": chunk.start_offset,
+                "end_offset": chunk.end_offset,
+                "classification_level": chunk.classification_level,
+                "embedding_provider": embedding_response.provider,
+                "embedding_model": embedding_response.model,
+                "embedding_dimension": embedding_response.dimension,
+                "vector_version": settings.embedding_vector_version,
+                "distance": result.distance,
+                "file_name": document.file_name if document else None,
+                "source_type": document.source_type if document else None,
+            },
+            citation=Citation(
                 document_id=chunk.document_id,
-                content=chunk.content,
+                chunk_id=chunk.id,
+                title=document.title if document else None,
+                source_uri=document.source_uri if document else None,
+                page_number=chunk.page_number,
+                section_path=chunk.section_path,
+                quote=chunk.content,
                 score=score,
-                source=RetrievalTool.VECTOR_SEARCH,
-                metadata={
-                    "workspace_id": chunk.workspace_id,
-                    "chunk_index": chunk.chunk_index,
-                    "token_count": chunk.token_count,
-                    "start_offset": chunk.start_offset,
-                    "end_offset": chunk.end_offset,
-                    "classification_level": chunk.classification_level,
-                    "embedding_provider": embedding_response.provider,
-                    "embedding_model": embedding_response.model,
-                    "embedding_dimension": embedding_response.dimension,
-                    "vector_version": settings.embedding_vector_version,
-                    "distance": result.distance,
-                    "file_name": document.file_name if document else None,
-                    "source_type": document.source_type if document else None,
-                },
-                citation=Citation(
-                    document_id=chunk.document_id,
-                    chunk_id=chunk.id,
-                    title=document.title if document else None,
-                    source_uri=document.source_uri if document else None,
-                    page_number=chunk.page_number,
-                    section_path=chunk.section_path,
-                    quote=chunk.content,
-                    score=score,
-                ),
-            )
+            ),
         )
+        chunk_key = str(chunk.id)
+        existing_candidate = deduped_candidates.get(chunk_key)
+        if not existing_candidate:
+            dedupe_order[chunk_key] = result_index
+            dedupe_distances[chunk_key] = result.distance
+            deduped_candidates[chunk_key] = candidate
+            continue
+
+        existing_distance_value = dedupe_distances.get(chunk_key, 1.0)
+        candidate_distance_value = result.distance
+        if (
+            candidate.score > existing_candidate.score
+            or (
+                candidate.score == existing_candidate.score
+                and candidate_distance_value < existing_distance_value
+            )
+        ):
+            dedupe_distances[chunk_key] = result.distance
+            deduped_candidates[chunk_key] = candidate
+
+    candidates = list(deduped_candidates.values())
+    candidates.sort(
+        key=lambda candidate: (
+            -candidate.score,
+            dedupe_distances.get(str(candidate.chunk_id), 1.0),
+            dedupe_order[str(candidate.chunk_id)],
+        )
+    )
+    candidates = candidates[:limit]
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     logger.info(
         f"[Retrieval] Vector search completed tenant={user_context.tenant_id} "
-        f"user={user_context.id} candidates={len(candidates)} "
-        f"latency_ms={latency_ms}"
+        f"user={user_context.id} raw_candidates={len(search_results)} "
+        f"deduplicated_candidates={len(deduped_candidates)} "
+        f"candidates={len(candidates)} latency_ms={latency_ms}"
     )
     return RetrievalResponse(
         strategy=RetrievalStrategy.VECTOR,
