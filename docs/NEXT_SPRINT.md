@@ -19,7 +19,7 @@ retrieval quality, and production operations.
 | `docker-compose.yml` | Runs local API, PostgreSQL/pgvector, Redis, MinIO, OpenSearch, Kafka with topic provisioning, migrations, seed, ingestion worker, indexing worker, embedding worker, Prometheus, and Grafana with explicit service-level environment variables, including API-side BM25 retrieval threshold, OpenSearch aliases, and OpenSearch search retry configuration. | Add profiles for lightweight API-only and full ingestion stacks. | High |
 | `.env.template` | Documents local host defaults for API, auth, database, Redis, Kafka, object storage, OpenSearch, OpenSearch aliases, OpenSearch search retry, BM25 retrieval thresholds, LLM, worker, agent, and monitoring settings. | Keep host-local defaults separate from Docker Compose service-name routing. | Medium |
 | `.dockerignore` | Keeps local and test artifacts out of Docker images. | Keep updated as new local cache, generated data, model, and artifact directories are added. | Low |
-| `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, vector retrieval, Kafka producer, Kafka consumer, and monitoring Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
+| `Makefile` | Provides repeatable validation, Docker commands, and script-backed embedding-worker, vector retrieval, BM25 retrieval, Kafka producer, Kafka consumer, and monitoring Docker smoke checks. | Add migration, broader local smoke tests, Docker smoke tests, and service-specific worker commands as the stack grows. | Medium |
 | `monitoring/prometheus.yml` | Local Prometheus scrape and rule-loading configuration for the Compose stack. | Add scrape jobs for workers, OpenSearch, Kafka, PostgreSQL, Redis, and object storage when safe exporters are introduced. | Medium |
 | `monitoring/grafana_datasource.yml` | Local Grafana datasource provisioning for Prometheus. | Add additional datasources only when tracing or log backends are added locally. | Medium |
 | `monitoring/grafana_dashboard.yml` | Local Grafana dashboard provider for the query dashboard file. | Add more dashboard providers only when dashboard ownership needs to split by domain. | Low |
@@ -27,6 +27,7 @@ retrieval quality, and production operations.
 | `monitoring/query_alerts.yml` | Prometheus alert rules for sustained query failure rate, p95 query latency, BM25 retrieval p95 latency, BM25 retrieval failures, open LLM provider circuits, sustained provider failures, and high retry-after delay. | Add alert rules for worker failures, DLQ growth, Kafka lag, and budget anomalies as those metrics land. | Medium |
 | `scripts/smoke_embedding_worker.py` | Local Docker smoke check that verifies the embedding-worker container can import the worker module and reach the configured database without invoking an external embedding provider. | Add a PostgreSQL/pgvector embedding smoke when test-safe local embeddings are available. | Medium |
 | `scripts/smoke_vector_retrieval.py` | Local Docker smoke check that seeds PostgreSQL/pgvector chunks and verifies tenant, workspace, ACL, and vector-order filtering through vector retrieval without invoking an external embedding provider. | Extend to cover model/version migration and stale-vector behavior when vector lifecycle policies are selected. | Medium |
+| `scripts/smoke_bm25_retrieval.py` | Local Docker smoke check that seeds PostgreSQL chunks, indexes them into OpenSearch, and verifies tenant, workspace, ACL, and BM25 score ordering through retrieval. | Extend to cover alias rollover and OpenSearch failure/retry paths when index lifecycle policy is selected. | Medium |
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add more focused Docker smoke scripts for OpenSearch, pgvector retrieval, and full upload-to-query flow. | Medium |
@@ -118,6 +119,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-07-07 | Added Docker-backed OpenSearch smoke coverage for BM25 retrieval. |
 | 2026-07-07 | Added Docker-backed PostgreSQL/pgvector smoke coverage for vector retrieval. |
 | 2026-07-07 | Added result deduplication to vector retrieval before applying the response limit. |
 | 2026-06-05 | Added source, metadata, tag, and date filter forwarding to hybrid retrieval. |
@@ -175,7 +177,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Add Docker-backed OpenSearch smoke coverage for BM25 retrieval. |
+| 1 | Add Docker-backed upload-to-query smoke coverage. |
 
 ## Lowest Priority Final Polish
 
