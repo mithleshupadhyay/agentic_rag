@@ -28,7 +28,7 @@ retrieval quality, and production operations.
 | `scripts/smoke_embedding_worker.py` | Local Docker smoke check that verifies the embedding-worker container can import the worker module and reach the configured database without invoking an external embedding provider. | Add a PostgreSQL/pgvector embedding smoke when test-safe local embeddings are available. | Medium |
 | `scripts/smoke_vector_retrieval.py` | Local Docker smoke check that seeds PostgreSQL/pgvector chunks and verifies tenant, workspace, ACL, and vector-order filtering through vector retrieval without invoking an external embedding provider. | Extend to cover model/version migration and stale-vector behavior when vector lifecycle policies are selected. | Medium |
 | `scripts/smoke_bm25_retrieval.py` | Local Docker smoke check that seeds PostgreSQL chunks, indexes them into OpenSearch, and verifies tenant, workspace, ACL, and BM25 score ordering through retrieval. | Extend to cover alias rollover and OpenSearch failure/retry paths when index lifecycle policy is selected. | Medium |
-| `scripts/smoke_upload_query.py` | Local Docker smoke check that uploads a text document through the API, waits for ingestion and BM25 indexing, and verifies the uploaded document is returned through `/query` without enabling LLM synthesis. | Extend to cover explicit ingestion status APIs when they are added. | Medium |
+| `scripts/smoke_upload_query.py` | Local Docker smoke check that uploads a text document through the API, waits for the document-scoped ingestion status API to report completion, then waits for BM25 indexing and verifies the uploaded document is returned through `/query` without enabling LLM synthesis. | Extend to cover Kafka-enabled upload-to-query mode when queue-backed local mode is the default. | Medium |
 | `scripts/smoke_kafka_producer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event through the Kafka producer adapter. | Add broker delivery metadata checks when producer callbacks and metrics are added. | Medium |
 | `scripts/docker-smoke-kafka-consumer.sh` | Host-side Docker smoke wrapper that verifies Kafka is reachable, pauses the polling ingestion worker, runs the Kafka consumer smoke in the API container, and restores the worker afterward. | Keep host Docker orchestration in scripts instead of inline Makefile shell blocks as smoke coverage grows. | Medium |
 | `scripts/smoke_kafka_consumer.py` | Local Docker smoke check that publishes a valid `retry.ingestion` event, consumes it through the Kafka consumer adapter, and verifies the ingestion retry handler completes a tenant-scoped job. | Add Kafka-enabled upload-to-query smoke coverage when queue-backed local mode is the default. | Medium |
@@ -120,6 +120,7 @@ retrieval quality, and production operations.
 
 | Date | Work |
 |---|---|
+| 2026-07-07 | Updated upload-to-query smoke coverage to poll document-scoped ingestion job status before `/query`. |
 | 2026-07-07 | Added document-scoped ingestion job status API coverage for uploaded documents. |
 | 2026-07-07 | Added Docker-backed upload-to-query smoke coverage through API upload, ingestion, BM25 indexing, and `/query`. |
 | 2026-07-07 | Added Docker-backed OpenSearch smoke coverage for BM25 retrieval. |
@@ -180,7 +181,7 @@ retrieval quality, and production operations.
 
 | Step | Work |
 |---|---|
-| 1 | Update upload-to-query smoke coverage to poll the ingestion job status endpoint before `/query`. |
+| 1 | Add ingestion and indexing worker lifecycle metrics for job throughput, failures, retries, and queue lag. |
 
 ## Lowest Priority Final Polish
 

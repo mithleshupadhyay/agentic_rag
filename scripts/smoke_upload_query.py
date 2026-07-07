@@ -109,6 +109,75 @@ def _upload_document(
     return payload
 
 
+def _wait_for_ingestion_job(
+    client: httpx.Client,
+    document_id: str,
+    job_id: str,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, Any] | None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+
+    while time.monotonic() < deadline:
+        try:
+            response = client.get(f"/documents/{document_id}/ingestion-jobs/{job_id}")
+            if response.status_code != 200:
+                last_error = (
+                    f"status={response.status_code} "
+                    f"body={_response_preview(response)}"
+                )
+                time.sleep(poll_seconds)
+                continue
+
+            payload = response.json()
+            actual_job_id = str(payload.get("id"))
+            actual_document_id = str(payload.get("document_id"))
+            status = payload.get("status")
+            current_stage = payload.get("current_stage")
+            if actual_job_id != job_id or actual_document_id != document_id:
+                logger.error(
+                    f"[UploadQuerySmoke] Ingestion job response mismatch "
+                    f"expected_job={job_id} actual_job={actual_job_id} "
+                    f"expected_document={document_id} actual_document={actual_document_id}"
+                )
+                return None
+
+            if status == "completed":
+                logger.info(
+                    f"[UploadQuerySmoke] Ingestion job completed "
+                    f"job={job_id} document={document_id} stage={current_stage}"
+                )
+                return payload
+
+            if status in {"failed", "cancelled"}:
+                logger.error(
+                    f"[UploadQuerySmoke] Ingestion job reached terminal failure "
+                    f"job={job_id} document={document_id} status={status} "
+                    f"stage={current_stage} error_type={payload.get('error_type')} "
+                    f"error_message={payload.get('error_message')}"
+                )
+                return None
+
+            last_error = (
+                f"status={status} stage={current_stage} "
+                f"retry_count={payload.get('retry_count')} "
+                f"next_retry_at={payload.get('next_retry_at')}"
+            )
+
+        except (httpx.HTTPError, ValueError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+
+        time.sleep(poll_seconds)
+
+    logger.error(
+        f"[UploadQuerySmoke] Ingestion job did not complete "
+        f"job={job_id} document={document_id} timeout_seconds={timeout_seconds} "
+        f"last_error={last_error}"
+    )
+    return None
+
+
 def _wait_for_query_result(
     client: httpx.Client,
     workspace_id: str,
@@ -235,6 +304,22 @@ def main() -> int:
         document_id = document.get("id")
         if not document_id:
             logger.error("[UploadQuerySmoke] Upload response did not include document.id")
+            return 1
+        ingestion_job_id = upload_payload.get("ingestion_job_id")
+        if not ingestion_job_id:
+            logger.error(
+                "[UploadQuerySmoke] Upload response did not include ingestion_job_id"
+            )
+            return 1
+
+        ingestion_payload = _wait_for_ingestion_job(
+            client=client,
+            document_id=str(document_id),
+            job_id=str(ingestion_job_id),
+            timeout_seconds=timeout_seconds,
+            poll_seconds=poll_seconds,
+        )
+        if ingestion_payload is None:
             return 1
 
         query_payload = _wait_for_query_result(
