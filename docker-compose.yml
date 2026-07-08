@@ -14,7 +14,7 @@ services:
       - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
       - APP_NAME=${APP_NAME:-Agentic RAG}
       - APP_VERSION=${APP_VERSION:-0.1.0}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8000,http://127.0.0.1:8000}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8100,http://127.0.0.1:8100}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-local}
       - LOCAL_AUTH_TOKEN=${LOCAL_AUTH_TOKEN:-local-dev-token}
       - LOCAL_USER_ID=${LOCAL_USER_ID:-local-user}
@@ -105,6 +105,20 @@ services:
       - eventnet
       - storagenet
       - searchnet
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agentic-rag-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    restart: unless-stopped
+    networks:
+      - appnet
 
   ingestion-worker:
     build:

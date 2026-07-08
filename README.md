@@ -36,6 +36,9 @@ make docker-up-build
 
 # Check API readiness
 curl http://localhost:8100/readiness
+
+# Open the frontend
+open http://localhost:5173
 ```
 
 ### Basic Usage
@@ -69,34 +72,40 @@ curl -X POST http://localhost:8100/query \
 open http://localhost:8100/docs
 ```
 
-### Gradio Demo
+### Frontend Demo
 
-The Gradio demo gives clients, founders, and hiring managers a simple browser
-chat page for uploading a PDF or text document, indexing it, asking questions,
+The React frontend gives clients, founders, and hiring managers a browser chat
+interface for uploading a PDF or text document, indexing it, asking questions,
 and reviewing citations.
 
-Start the backend first:
+Run the full Docker stack:
 
 ```bash
 make docker-up-build
 curl http://localhost:8100/readiness
 ```
 
-Run the demo:
+Open:
+
+```text
+http://localhost:5173
+```
+
+For frontend development:
 
 ```bash
-cd demo
-poetry install
-poetry run python gradio_app.py
+cd frontend
+npm install
+npm run dev
 ```
 
 Open:
 
 ```text
-http://localhost:7860
+http://localhost:5173
 ```
 
-More demo and deployment notes are in [demo/README.md](demo/README.md).
+More frontend notes are in [frontend/README.md](frontend/README.md).
 
 ### Docker Smoke Checks
 
@@ -127,13 +136,15 @@ The local Docker stack includes PostgreSQL with pgvector, Redis, Kafka, MinIO, O
 - LangGraph-backed agent runtime with checkpoints, cancellation checks, guardrails, and streaming events
 - LiteLLM gateway with retries, budget checks, streaming, embeddings, and circuit breaker support
 - Prometheus metrics, Grafana dashboard provisioning, and alert rules for query and retrieval behavior
-- Docker Compose stack for local API, workers, database, object storage, search, queue, cache, and monitoring
+- React frontend for document upload, ingestion polling, document-scoped chat, citations, and context evidence
+- Docker Compose stack for local frontend, API, workers, database, object storage, search, queue, cache, and monitoring
 
 ## Available Services
 
 | Service | Runtime | Responsibility |
 |---|---|---|
 | API | `agentic_rag.main:app` | Health, document, retrieval, and query endpoints |
+| Frontend | React + Nginx | Browser chat interface for document upload, indexing, query, citations, and context |
 | Ingestion worker | `agentic_rag.workers.ingestion` | Claims upload jobs, reads objects, parses text, writes chunks, and schedules downstream work |
 | Indexing worker | `agentic_rag.workers.indexing` | Indexes ready chunks into OpenSearch for BM25 retrieval |
 | Embedding worker | `agentic_rag.workers.embedding` | Writes missing or stale chunk embeddings into pgvector |
@@ -375,6 +386,7 @@ No license file is currently included. Treat this repository as private/internal
 ## Support
 
 - Documentation: [docs/](docs/)
+- Frontend when running locally: `http://localhost:5173`
 - API docs when running locally: `http://localhost:8100/docs`
 - Health endpoint: `http://localhost:8100/readiness`
 
