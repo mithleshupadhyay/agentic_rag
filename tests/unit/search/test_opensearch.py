@@ -7,7 +7,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.search.opensearch import OpenSearchClient, build_chunk_search_document
+from agentic_rag.search.opensearch import (
+    OpenSearchClient,
+    build_chunk_search_document,
+    normalize_metadata_for_search,
+)
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.crud.documents import create_document
 from agentic_rag.shared.db.crud.ingestion import replace_document_chunks
@@ -101,6 +105,30 @@ def test_build_chunk_search_document_includes_tenant_acl_and_content(db: Session
     assert payload["acl_version"] == 4
 
 
+def test_normalize_metadata_for_search_converts_top_level_values() -> None:
+    metadata = {
+        "department": "security",
+        "published": True,
+        "priority": 3,
+        "score": 9.5,
+        "tags": ["policy", "internal"],
+        "nested": {"owner": "team-a"},
+        "ignored.none": "value",
+        "empty": None,
+    }
+
+    payload = normalize_metadata_for_search(metadata)
+
+    assert payload == {
+        "department": "security",
+        "published": "true",
+        "priority": "3",
+        "score": "9.5",
+        "tags": '["policy","internal"]',
+        "nested": '{"owner":"team-a"}',
+    }
+
+
 def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> None:
     chunk = add_chunk(db)
     requests: list[httpx.Request] = []
@@ -111,6 +139,13 @@ def test_opensearch_client_creates_index_and_bulk_indexes_chunk(db: Session) -> 
             return httpx.Response(404, request=request)
         if request.method == "PUT":
             payload = json.loads(request.content.decode("utf-8"))
+            dynamic_templates = payload["mappings"]["dynamic_templates"]
+            assert dynamic_templates[0]["document_metadata_values"]["path_match"] == (
+                "document_metadata.*"
+            )
+            assert dynamic_templates[1]["chunk_metadata_values"]["path_match"] == (
+                "chunk_metadata.*"
+            )
             properties = payload["mappings"]["properties"]
             assert properties["document_metadata"] == {"type": "object", "dynamic": True}
             assert properties["chunk_metadata"] == {"type": "object", "dynamic": True}

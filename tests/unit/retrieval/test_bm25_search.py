@@ -147,8 +147,8 @@ def test_search_bm25_chunks_adds_exact_metadata_filters() -> None:
     assert {
         "bool": {
             "should": [
-                {"term": {"document_metadata.published": True}},
-                {"term": {"chunk_metadata.published": True}},
+                {"term": {"document_metadata.published.keyword": "true"}},
+                {"term": {"chunk_metadata.published.keyword": "true"}},
             ],
             "minimum_should_match": 1,
         }
@@ -156,8 +156,8 @@ def test_search_bm25_chunks_adds_exact_metadata_filters() -> None:
     assert {
         "bool": {
             "should": [
-                {"term": {"document_metadata.priority": 3}},
-                {"term": {"chunk_metadata.priority": 3}},
+                {"term": {"document_metadata.priority.keyword": "3"}},
+                {"term": {"chunk_metadata.priority.keyword": "3"}},
             ],
             "minimum_should_match": 1,
         }

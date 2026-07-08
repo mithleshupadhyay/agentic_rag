@@ -99,14 +99,10 @@ def search_bm25_chunks(
                     detail="Metadata filter keys must be non-empty top-level field names.",
                 )
 
-            if isinstance(metadata_value, str):
-                metadata_filter_field_suffix = ".keyword"
-            elif (
-                isinstance(metadata_value, bool)
-                or isinstance(metadata_value, int)
-                or isinstance(metadata_value, float)
-            ):
-                metadata_filter_field_suffix = ""
+            if isinstance(metadata_value, bool):
+                metadata_filter_value = str(metadata_value).lower()
+            elif isinstance(metadata_value, (str, int, float)):
+                metadata_filter_value = str(metadata_value)
             else:
                 logger.warning(
                     f"[Retrieval] Invalid BM25 metadata filter value "
@@ -119,17 +115,17 @@ def search_bm25_chunks(
                 )
 
             document_metadata_field = (
-                f"document_metadata.{clean_metadata_key}{metadata_filter_field_suffix}"
+                f"document_metadata.{clean_metadata_key}.keyword"
             )
             chunk_metadata_field = (
-                f"chunk_metadata.{clean_metadata_key}{metadata_filter_field_suffix}"
+                f"chunk_metadata.{clean_metadata_key}.keyword"
             )
             filter_clauses.append(
                 {
                     "bool": {
                         "should": [
-                            {"term": {document_metadata_field: metadata_value}},
-                            {"term": {chunk_metadata_field: metadata_value}},
+                            {"term": {document_metadata_field: metadata_filter_value}},
+                            {"term": {chunk_metadata_field: metadata_filter_value}},
                         ],
                         "minimum_should_match": 1,
                     }

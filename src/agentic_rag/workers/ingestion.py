@@ -6,10 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
+from io import BytesIO
 from typing import Any, Optional
 
 from fastapi import HTTPException
 from pydantic import ValidationError
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from sqlalchemy.orm import Session
 
 from agentic_rag.monitoring.metrics import (
@@ -81,6 +84,10 @@ TEXT_FILE_EXTENSIONS = {
     ".tsv",
 }
 
+PDF_FILE_EXTENSIONS = {
+    ".pdf",
+}
+
 TEXT_MIME_TYPES = {
     "application/json",
     "application/jsonl",
@@ -90,6 +97,11 @@ TEXT_MIME_TYPES = {
     "text/markdown",
     "text/plain",
     "text/tab-separated-values",
+}
+
+PDF_MIME_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
 }
 
 
@@ -111,11 +123,43 @@ def decode_text_document(
 ) -> str:
     extension = os.path.splitext(file_name or "")[1].lower()
     normalized_mime_type = (mime_type or "").split(";")[0].strip().lower()
+    is_pdf_type = (
+        normalized_mime_type in PDF_MIME_TYPES
+        or extension in PDF_FILE_EXTENSIONS
+    )
     is_text_type = (
         normalized_mime_type.startswith("text/")
         or normalized_mime_type in TEXT_MIME_TYPES
         or extension in TEXT_FILE_EXTENSIONS
     )
+
+    if is_pdf_type:
+        try:
+            reader = PdfReader(BytesIO(data))
+        except (PdfReadError, ValueError, TypeError) as e:
+            raise ValueError(
+                f"Could not read uploaded PDF: file_name={file_name}, "
+                f"mime_type={mime_type}"
+            ) from e
+
+        page_texts = []
+        for page_index, page in enumerate(reader.pages, start=1):
+            try:
+                page_text = page.extract_text() or ""
+            except Exception as e:
+                raise ValueError(
+                    f"Could not extract text from uploaded PDF page "
+                    f"{page_index}: file_name={file_name}"
+                ) from e
+
+            clean_page_text = page_text.strip()
+            if clean_page_text:
+                page_texts.append(f"Page {page_index}\n{clean_page_text}")
+
+        text = "\n\n".join(page_texts).strip()
+        if not text:
+            raise ValueError("Uploaded PDF has no extractable text")
+        return text
 
     if not is_text_type:
         raise ValueError(

@@ -69,6 +69,35 @@ curl -X POST http://localhost:8100/query \
 open http://localhost:8100/docs
 ```
 
+### Gradio Demo
+
+The Gradio demo gives clients, founders, and hiring managers a simple browser
+chat page for uploading a PDF or text document, indexing it, asking questions,
+and reviewing citations.
+
+Start the backend first:
+
+```bash
+make docker-up-build
+curl http://localhost:8100/readiness
+```
+
+Run the demo:
+
+```bash
+cd demo
+poetry install
+poetry run python gradio_app.py
+```
+
+Open:
+
+```text
+http://localhost:7860
+```
+
+More demo and deployment notes are in [demo/README.md](demo/README.md).
+
 ### Docker Smoke Checks
 
 The local Docker stack includes PostgreSQL with pgvector, Redis, Kafka, MinIO, OpenSearch, API, workers, Prometheus, and Grafana. Use the smoke checks below after `make docker-up-build`.

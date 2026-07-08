@@ -150,12 +150,42 @@ def test_decode_text_document_accepts_text_like_files() -> None:
     assert text.startswith("# Policy")
 
 
+def test_decode_text_document_extracts_pdf_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePDFPage:
+        def __init__(self, text: str):
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+    class FakePDFReader:
+        def __init__(self, stream):
+            stream.read()
+            self.pages = [
+                FakePDFPage("Mithlesh has Agentic RAG experience."),
+                FakePDFPage("Production retrieval and ingestion work."),
+            ]
+
+    monkeypatch.setattr(ingestion_worker_module, "PdfReader", FakePDFReader)
+
+    text = decode_text_document(
+        data=b"%PDF-1.7",
+        file_name="resume.pdf",
+        mime_type="application/pdf",
+    )
+
+    assert "Page 1" in text
+    assert "Mithlesh has Agentic RAG experience." in text
+    assert "Page 2" in text
+    assert "Production retrieval and ingestion work." in text
+
+
 def test_decode_text_document_rejects_unsupported_file_type() -> None:
     with pytest.raises(ValueError):
         decode_text_document(
-            data=b"%PDF-1.7",
-            file_name="policy.pdf",
-            mime_type="application/pdf",
+            data=b"PK",
+            file_name="policy.docx",
+            mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
 
@@ -477,7 +507,7 @@ def test_process_ingestion_job_publishes_retry_event_for_retryable_failure(
     assert stored_document.status == "failed"
     assert stored_job.status == "failed"
     assert stored_job.error_type == "ValueError"
-    assert "Unsupported ingestion file type" in stored_job.error_message
+    assert "Could not read uploaded PDF" in stored_job.error_message
     assert stored_job.next_retry_at is not None
     assert len(event_publisher.published) == 1
 

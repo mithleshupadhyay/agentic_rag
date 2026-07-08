@@ -12,6 +12,36 @@ from agentic_rag.shared.db.models import DocumentChunk
 logger = logging.getLogger(__name__)
 
 
+def normalize_metadata_for_search(metadata: Any) -> dict[str, str]:
+    if not isinstance(metadata, dict):
+        return {}
+
+    normalized: dict[str, str] = {}
+    for metadata_key, metadata_value in metadata.items():
+        if not isinstance(metadata_key, str):
+            continue
+
+        clean_key = metadata_key.strip()
+        if not clean_key or "." in clean_key:
+            continue
+
+        if metadata_value is None:
+            continue
+        if isinstance(metadata_value, bool):
+            normalized[clean_key] = str(metadata_value).lower()
+        elif isinstance(metadata_value, (str, int, float)):
+            normalized[clean_key] = str(metadata_value)
+        else:
+            normalized[clean_key] = json.dumps(
+                metadata_value,
+                default=str,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+
+    return normalized
+
+
 def build_chunk_search_document(chunk: DocumentChunk) -> dict[str, Any]:
     document = chunk.document
     chunk_acl = chunk.acl
@@ -34,8 +64,10 @@ def build_chunk_search_document(chunk: DocumentChunk) -> dict[str, Any]:
         "file_name": document.file_name if document else None,
         "source_type": document.source_type if document else None,
         "source_uri": document.source_uri if document else None,
-        "document_metadata": document.metadata_ if document else {},
-        "chunk_metadata": chunk.metadata_,
+        "document_metadata": normalize_metadata_for_search(
+            document.metadata_ if document else {}
+        ),
+        "chunk_metadata": normalize_metadata_for_search(chunk.metadata_),
         "visibility": chunk_acl.visibility if chunk_acl else "private",
         "allowed_user_ids": chunk_acl.allowed_user_ids if chunk_acl else [],
         "allowed_group_ids": chunk_acl.allowed_group_ids if chunk_acl else [],
@@ -173,6 +205,36 @@ class OpenSearchClient:
             },
             "mappings": {
                 "dynamic": "false",
+                "dynamic_templates": [
+                    {
+                        "document_metadata_values": {
+                            "path_match": "document_metadata.*",
+                            "mapping": {
+                                "type": "text",
+                                "fields": {
+                                    "keyword": {
+                                        "type": "keyword",
+                                        "ignore_above": 1024,
+                                    }
+                                },
+                            },
+                        }
+                    },
+                    {
+                        "chunk_metadata_values": {
+                            "path_match": "chunk_metadata.*",
+                            "mapping": {
+                                "type": "text",
+                                "fields": {
+                                    "keyword": {
+                                        "type": "keyword",
+                                        "ignore_above": 1024,
+                                    }
+                                },
+                            },
+                        }
+                    },
+                ],
                 "properties": {
                     "tenant_id": {"type": "keyword"},
                     "workspace_id": {"type": "keyword"},
