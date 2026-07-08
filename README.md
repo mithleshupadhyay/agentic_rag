@@ -35,25 +35,25 @@ make check
 make docker-up-build
 
 # Check API readiness
-curl http://localhost:8000/readiness
+curl http://localhost:8100/readiness
 ```
 
 ### Basic Usage
 
 ```bash
 # Upload a text document
-curl -X POST http://localhost:8000/documents/upload \
+curl -X POST http://localhost:8100/documents/upload \
   -H "Authorization: Bearer local-dev-token" \
   -F "file=@README.md;type=text/plain" \
   -F "workspace_id=local-workspace" \
   -F "title=Agentic RAG README"
 
 # Check document-scoped ingestion jobs
-curl http://localhost:8000/documents/{document_id}/ingestion-jobs \
+curl http://localhost:8100/documents/{document_id}/ingestion-jobs \
   -H "Authorization: Bearer local-dev-token"
 
 # Run a retrieval-backed query
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8100/query \
   -H "Authorization: Bearer local-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -66,7 +66,7 @@ curl -X POST http://localhost:8000/query \
   }'
 
 # Open interactive API docs
-open http://localhost:8000/docs
+open http://localhost:8100/docs
 ```
 
 ### Docker Smoke Checks
@@ -346,8 +346,8 @@ No license file is currently included. Treat this repository as private/internal
 ## Support
 
 - Documentation: [docs/](docs/)
-- API docs when running locally: `http://localhost:8000/docs`
-- Health endpoint: `http://localhost:8000/readiness`
+- API docs when running locally: `http://localhost:8100/docs`
+- Health endpoint: `http://localhost:8100/readiness`
 
 ---
 
