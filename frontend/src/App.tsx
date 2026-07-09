@@ -1307,6 +1307,26 @@ function ChatView({
   onSend: () => void;
   onToggleEvidence: () => void;
 }) {
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+
+    const computedStyle = window.getComputedStyle(textarea);
+    const parsedLineHeight = Number.parseFloat(computedStyle.lineHeight);
+    const lineHeight = Number.isFinite(parsedLineHeight) ? parsedLineHeight : 24;
+    const maxHeight = Math.ceil(lineHeight * 5);
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [input]);
+
   return (
     <div className={`workspace ${showEvidence ? "with-evidence" : ""}`}>
       <section className="conversation">
@@ -1372,6 +1392,7 @@ function ChatView({
           <div className="composer-input">
             <Search size={18} />
             <textarea
+              ref={inputRef}
               value={input}
               onChange={(event) => onInputChange(event.target.value)}
               onKeyDown={onKeyDown}
