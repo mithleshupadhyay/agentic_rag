@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.query.bm25_query import run_bm25_query
+from agentic_rag.query.bm25_query import build_extractive_answer, run_bm25_query
 from agentic_rag.shared.db.base import Base
 from agentic_rag.shared.db.models import QueryRun, Tenant
 from agentic_rag.shared.schemas.common import Citation
@@ -21,6 +21,7 @@ from agentic_rag.shared.schemas.query import (
 )
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
+    ContextChunk,
     RetrievalResponse,
     RetrievalStrategy,
     RetrievalTool,
@@ -50,6 +51,14 @@ class FakeQueryCacheRedis:
         self.setex_calls.append((key, ttl_seconds, payload))
         if self.fail_set:
             raise RedisError("redis write unavailable")
+
+
+@pytest.fixture(autouse=True)
+def default_query_test_settings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.settings.llm_synthesis_enabled",
+        False,
+    )
 
 
 def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
@@ -114,7 +123,8 @@ def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert response.context_token_count == 4
-    assert "LLM synthesis is not enabled yet" in response.answer
+    assert "Security policy content." in response.answer
+    assert "LLM synthesis is not enabled" not in response.answer
     assert response.cache_lookup_status == QueryCacheLookupStatus.DISABLED
     assert response.cache_write_status == QueryCacheWriteStatus.DISABLED
     assert response.cache_ttl_seconds is None
@@ -122,6 +132,132 @@ def test_run_bm25_query_retrieves_and_builds_context(monkeypatch) -> None:
     assert captured["query"] == "security policy"
     assert captured["filters"].workspace_id == "workspace-a"
     assert captured["limit"] == 7
+
+
+def test_run_bm25_query_uses_requested_hybrid_strategy(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    document_id = uuid4()
+    chunk_id = uuid4()
+    captured = {}
+
+    def fake_search_hybrid_chunks(db, user_context, query, filters, limit):
+        captured["db"] = db
+        captured["user_context"] = user_context
+        captured["query"] = query
+        captured["filters"] = filters
+        captured["limit"] = limit
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.HYBRID,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=chunk_id,
+                    document_id=document_id,
+                    content="Hybrid retrieval found semantic context.",
+                    score=0.82,
+                    source=RetrievalStrategy.HYBRID.value,
+                    metadata={"token_count": 5},
+                    citation=Citation(
+                        document_id=document_id,
+                        chunk_id=chunk_id,
+                        title="Semantic Policy",
+                        quote="Hybrid retrieval found semantic context.",
+                        score=0.82,
+                    ),
+                )
+            ],
+            latency_ms=9,
+        )
+
+    def fail_search_bm25_chunks(user_context, query, filters, limit):
+        raise AssertionError("BM25 should not run for a hybrid query request")
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_hybrid_chunks",
+        fake_search_hybrid_chunks,
+    )
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_bm25_chunks",
+        fail_search_bm25_chunks,
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        response = run_bm25_query(
+            user_context=user_context,
+            request=QueryRequest(
+                query=" semantic policy ",
+                workspace_id="workspace-a",
+                retrieval_strategy=RetrievalStrategy.HYBRID,
+                retrieval_limit=6,
+                max_context_chunks=3,
+                max_context_tokens=500,
+            ),
+            db=db,
+        )
+        query_run = (
+            db.query(QueryRun).filter(QueryRun.id == response.agent_run_id).one()
+        )
+        persisted_strategy = query_run.retrieval_strategy
+
+    assert response.retrieval_strategy == RetrievalStrategy.HYBRID
+    assert response.candidates[0].source == RetrievalStrategy.HYBRID.value
+    assert "Hybrid retrieval found semantic context." in response.answer
+    assert persisted_strategy == RetrievalStrategy.HYBRID.value
+    assert captured["db"] is not None
+    assert captured["user_context"].id == "user-1"
+    assert captured["query"] == "semantic policy"
+    assert captured["filters"].workspace_id == "workspace-a"
+    assert captured["limit"] == 6
+
+
+def test_build_extractive_answer_marks_partial_excerpt_without_fake_sentence() -> None:
+    document_id = uuid4()
+    chunk_id = uuid4()
+
+    answer = build_extractive_answer(
+        query_text="backend experience",
+        context_chunks=[
+            ContextChunk(
+                document_id=document_id,
+                chunk_id=chunk_id,
+                content=(
+                    "Built production backend APIs with FastAPI and PostgreSQL. "
+                    "• Strong in Python, Kafka, Redis, Docker, and CI/CD, "
+                    "with practical experience developing reliable"
+                ),
+                token_count=25,
+                citation=Citation(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    title="Resume",
+                ),
+            )
+        ],
+    )
+
+    assert "Built production backend APIs with FastAPI and PostgreSQL." in answer
+    assert "- Strong in Python, Kafka, Redis, Docker, and CI/CD" in answer
+    assert "with practical experience developing reliable..." in answer
+    assert "with practical experience developing reliable. [1]" not in answer
+    assert "- • Strong" not in answer
 
 
 def test_run_bm25_query_rejects_workspace_conflict() -> None:
@@ -600,7 +736,10 @@ def test_run_bm25_query_persists_completed_query_run(monkeypatch) -> None:
         assert query_run.llm_output_tokens == 0
         assert query_run.llm_cost_estimate == 0.0
         assert query_run.verification_status == "not_required"
-        assert query_run.verification_reason == "LLM synthesis was not requested."
+        assert query_run.verification_reason == (
+            "Built an extractive answer from authorized retrieved context because "
+            "LLM synthesis was not requested."
+        )
         assert query_run.response_payload["agent_run_id"] == str(response.agent_run_id)
         assert query_run.response_payload["verification_status"] == "not_required"
         assert query_run.response_payload["cache_lookup_status"] == "disabled"
@@ -850,7 +989,8 @@ def test_run_bm25_query_writes_response_to_cache_on_miss(monkeypatch) -> None:
     cached_key, ttl_seconds, cached_payload = fake_redis.setex_calls[0]
     cached_data = json.loads(cached_payload)
 
-    assert response.answer.startswith("LLM synthesis is not enabled yet")
+    assert "Security policy content." in response.answer
+    assert "LLM synthesis is not enabled" not in response.answer
     assert response.cache_lookup_status == QueryCacheLookupStatus.MISS
     assert response.cache_write_status == QueryCacheWriteStatus.WRITTEN
     assert response.cache_ttl_seconds == 60

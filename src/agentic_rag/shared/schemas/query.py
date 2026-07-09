@@ -35,6 +35,7 @@ class QueryRequest(APIModel):
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
     history: list[ConversationMessage] = Field(default_factory=list)
     stream: bool = False
+    retrieval_strategy: RetrievalStrategy = RetrievalStrategy.BM25
     retrieval_limit: int = Field(default=20, ge=1, le=200)
     max_context_chunks: int = Field(default=12, ge=1, le=50)
     max_context_tokens: int = Field(default=6000, ge=500)

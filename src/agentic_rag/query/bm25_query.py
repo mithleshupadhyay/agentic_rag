@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 from uuid import UUID, uuid4
 
@@ -14,6 +15,8 @@ from agentic_rag.llm.gateway import generate_chat_completion
 from agentic_rag.query.answer_verifier import verify_answer_support
 from agentic_rag.retrieval.bm25_search import search_bm25_chunks
 from agentic_rag.retrieval.context_builder import build_context
+from agentic_rag.retrieval.hybrid_search import search_hybrid_chunks
+from agentic_rag.retrieval.vector_search import search_vector_chunks
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.query_runs import (
     create_query_run,
@@ -28,10 +31,141 @@ from agentic_rag.shared.schemas.query import (
     QueryRequest,
     QueryResponse,
 )
-from agentic_rag.shared.schemas.retrieval import ContextBuildRequest, RetrievalStrategy
+from agentic_rag.shared.schemas.retrieval import (
+    ContextBuildRequest,
+    ContextChunk,
+    RetrievalStrategy,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+def build_extractive_answer(
+    query_text: str,
+    context_chunks: list[ContextChunk],
+) -> str:
+    query_terms = set(re.findall(r"[a-z0-9][a-z0-9_+.#-]{2,}", query_text.lower()))
+
+    passage_candidates: list[tuple[int, int, int, str, str]] = []
+    for context_index, context_chunk in enumerate(context_chunks, start=1):
+        content = re.sub(r"\s+", " ", context_chunk.content).strip()
+        if not content:
+            continue
+
+        raw_segments = re.split(r"(?<=[.!?])\s+|\s+•\s+|\n+", content)
+        title = context_chunk.citation.title or "selected document"
+
+        for segment_index, raw_segment in enumerate(raw_segments):
+            segment = raw_segment.strip(" \t\r\n,;:-•")
+            if len(segment) < 12:
+                continue
+
+            segment_is_complete = segment.endswith((".", "!", "?"))
+            segment_terms = set(
+                re.findall(r"[a-z0-9][a-z0-9_+.#-]*", segment.lower())
+            )
+            overlap_count = len(query_terms & segment_terms)
+
+            if len(segment) > 380:
+                segment_is_complete = False
+                lower_segment = segment.lower()
+                term_positions = [
+                    lower_segment.find(term)
+                    for term in query_terms
+                    if lower_segment.find(term) >= 0
+                ]
+                first_match = min(term_positions) if term_positions else 0
+                start = max(0, first_match - 90)
+                end = min(len(segment), first_match + 290)
+
+                if start > 0:
+                    next_space = segment.find(" ", start)
+                    if next_space >= 0 and next_space < end:
+                        start = next_space + 1
+
+                sentence_end = -1
+                for marker in (". ", "! ", "? "):
+                    marker_index = segment.find(marker, end)
+                    if marker_index >= 0 and marker_index <= min(
+                        len(segment),
+                        end + 80,
+                    ):
+                        sentence_end = marker_index + 1
+                        break
+                if sentence_end >= 0:
+                    end = sentence_end
+                    segment_is_complete = True
+                elif end < len(segment):
+                    previous_space = segment.rfind(" ", start, end)
+                    if previous_space > start:
+                        end = previous_space
+
+                segment = segment[start:end].strip(" \t\r\n,;:-•")
+
+            if not segment.endswith((".", "!", "?")):
+                segment = f"{segment.rstrip(',;:')}{'' if segment_is_complete else '...'}"
+
+            passage_candidates.append(
+                (
+                    overlap_count,
+                    -context_index,
+                    -segment_index,
+                    title,
+                    f"{segment} [{context_index}]",
+                )
+            )
+
+    if not passage_candidates:
+        for context_index, context_chunk in enumerate(context_chunks, start=1):
+            content = re.sub(r"\s+", " ", context_chunk.content).strip()
+            if not content:
+                continue
+
+            title = context_chunk.citation.title or "selected document"
+            if len(content) > 380:
+                content = content[:380].rsplit(" ", 1)[0].strip()
+            content = content.strip(" \t\r\n,;:-•")
+            if not content:
+                continue
+            if not content.endswith((".", "!", "?")):
+                content = f"{content.rstrip(',;:')}..."
+
+            passage_candidates.append(
+                (
+                    0,
+                    -context_index,
+                    0,
+                    title,
+                    f"{content} [{context_index}]",
+                )
+            )
+            if len(passage_candidates) >= 4:
+                break
+
+    if not passage_candidates:
+        return (
+            "I could not find relevant authorized context for this query. "
+            "Try a more specific question or choose another indexed document."
+        )
+
+    passage_candidates.sort(reverse=True)
+    selected_passages: list[tuple[str, str]] = []
+    seen_passages: set[str] = set()
+    for _, _, _, title, passage in passage_candidates:
+        normalized_passage = passage.lower()
+        if normalized_passage in seen_passages:
+            continue
+        selected_passages.append((title, passage))
+        seen_passages.add(normalized_passage)
+        if len(selected_passages) >= 4:
+            break
+
+    answer_lines = ["I found these relevant excerpts in the selected documents:"]
+    for title, passage in selected_passages:
+        answer_lines.append(f"- {passage} Source: {title}.")
+
+    return "\n".join(answer_lines)
 
 
 def run_bm25_query(
@@ -41,9 +175,11 @@ def run_bm25_query(
     request_id: str | None = None,
     agent_run_id: UUID | None = None,
 ) -> QueryResponse:
+    retrieval_strategy = request.retrieval_strategy
     logger.info(
-        f"[Query] BM25 query started tenant={user_context.tenant_id} "
+        f"[Query] Query started tenant={user_context.tenant_id} "
         f"user={user_context.id} request_id={request_id} "
+        f"retrieval_strategy={retrieval_strategy.value} "
         f"retrieval_limit={request.retrieval_limit}"
     )
     started_at = time.perf_counter()
@@ -51,6 +187,29 @@ def run_bm25_query(
     query_text = request.query.strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="Query text is required.")
+
+    supported_strategies = {
+        RetrievalStrategy.BM25,
+        RetrievalStrategy.VECTOR,
+        RetrievalStrategy.HYBRID,
+    }
+    if retrieval_strategy not in supported_strategies:
+        raise HTTPException(
+            status_code=400,
+            detail="Query retrieval_strategy must be bm25, vector, or hybrid.",
+        )
+
+    if retrieval_strategy in {RetrievalStrategy.VECTOR, RetrievalStrategy.HYBRID}:
+        if db is None:
+            logger.warning(
+                f"[Query] Query rejected because {retrieval_strategy.value} retrieval "
+                f"requires a database session tenant={user_context.tenant_id} "
+                f"user={user_context.id} request_id={request_id}"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"{retrieval_strategy.value} query retrieval requires a database session.",
+            )
 
     filters = request.filters.model_copy(deep=True)
     if request.workspace_id:
@@ -100,7 +259,7 @@ def run_bm25_query(
                     "retrieval_limit": request.retrieval_limit,
                     "max_context_chunks": request.max_context_chunks,
                     "max_context_tokens": request.max_context_tokens,
-                    "retrieval_strategy": RetrievalStrategy.BM25.value,
+                    "retrieval_strategy": retrieval_strategy.value,
                     "llm_synthesis_enabled": settings.llm_synthesis_enabled,
                     "llm_provider": settings.llm_provider,
                     "llm_model": settings.default_llm_model,
@@ -114,7 +273,8 @@ def run_bm25_query(
                     query_cache_json.encode("utf-8")
                 ).hexdigest()
                 query_cache_key = (
-                    f"{settings.query_cache_key_prefix}:bm25:{query_cache_hash}"
+                    f"{settings.query_cache_key_prefix}:{retrieval_strategy.value}:"
+                    f"{query_cache_hash}"
                 )
                 redis_client = Redis.from_url(
                     settings.redis_url,
@@ -150,21 +310,24 @@ def run_bm25_query(
                             response=response,
                         )
                     logger.info(
-                        f"[Query] BM25 query cache hit tenant={user_context.tenant_id} "
+                        f"[Query] Query cache hit tenant={user_context.tenant_id} "
                         f"user={user_context.id} request_id={request_id} "
+                        f"retrieval_strategy={retrieval_strategy.value} "
                         f"cache_key_hash={query_cache_hash}"
                     )
                     return response
 
                 logger.info(
-                    f"[Query] BM25 query cache miss tenant={user_context.tenant_id} "
+                    f"[Query] Query cache miss tenant={user_context.tenant_id} "
                     f"user={user_context.id} request_id={request_id} "
+                    f"retrieval_strategy={retrieval_strategy.value} "
                     f"cache_key_hash={query_cache_hash}"
                 )
             except (RedisError, TypeError, ValueError) as e:
                 logger.warning(
-                    f"[Query] BM25 query cache skipped tenant={user_context.tenant_id} "
+                    f"[Query] Query cache skipped tenant={user_context.tenant_id} "
                     f"user={user_context.id} request_id={request_id} "
+                    f"retrieval_strategy={retrieval_strategy.value} "
                     f"error_type={type(e).__name__}"
                 )
                 cache_lookup_status = QueryCacheLookupStatus.SKIPPED
@@ -172,12 +335,31 @@ def run_bm25_query(
                 redis_client = None
                 query_cache_key = None
 
-        retrieval_response = search_bm25_chunks(
-            user_context=user_context,
-            query=query_text,
-            filters=filters,
-            limit=request.retrieval_limit,
-        )
+        if retrieval_strategy == RetrievalStrategy.BM25:
+            retrieval_response = search_bm25_chunks(
+                user_context=user_context,
+                query=query_text,
+                filters=filters,
+                limit=request.retrieval_limit,
+            )
+        elif retrieval_strategy == RetrievalStrategy.VECTOR:
+            assert db is not None
+            retrieval_response = search_vector_chunks(
+                db=db,
+                user_context=user_context,
+                query=query_text,
+                filters=filters,
+                limit=request.retrieval_limit,
+            )
+        else:
+            assert db is not None
+            retrieval_response = search_hybrid_chunks(
+                db=db,
+                user_context=user_context,
+                query=query_text,
+                filters=filters,
+                limit=request.retrieval_limit,
+            )
 
         context_response = build_context(
             ContextBuildRequest(
@@ -209,18 +391,20 @@ def run_bm25_query(
         )
 
         if context_response.context:
-            answer = (
-                "LLM synthesis is not enabled yet. "
-                f"Retrieved {len(context_response.context)} context chunks for this query."
-            )
+            answer = build_extractive_answer(query_text, context_response.context)
             verification_status = AnswerVerificationStatus.NOT_REQUIRED
-            verification_reason = "LLM synthesis was not requested."
+            verification_reason = (
+                "Built an extractive answer from authorized retrieved context because "
+                "LLM synthesis was not requested."
+            )
             top_candidate_score = 0.0
             for candidate in retrieval_response.candidates:
                 if candidate.score > top_candidate_score:
                     top_candidate_score = candidate.score
 
             retrieval_strength = min(top_candidate_score / 5.0, 1.0)
+            if retrieval_response.strategy != RetrievalStrategy.BM25:
+                retrieval_strength = min(top_candidate_score, 1.0)
             context_coverage = min(
                 len(context_response.context) / request.max_context_chunks,
                 1.0,
@@ -246,9 +430,10 @@ def run_bm25_query(
             )
         else:
             logger.info(
-                f"[Query] BM25 query found no authorized context "
+                f"[Query] Query found no authorized context "
                 f"tenant={user_context.tenant_id} user={user_context.id} "
-                f"request_id={request_id} candidates={len(retrieval_response.candidates)}"
+                f"request_id={request_id} retrieval_strategy={retrieval_response.strategy.value} "
+                f"candidates={len(retrieval_response.candidates)}"
             )
 
         if settings.llm_synthesis_enabled and context_response.context:
@@ -364,8 +549,9 @@ def run_bm25_query(
         latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
 
         logger.info(
-            f"[Query] BM25 query completed tenant={user_context.tenant_id} "
+            f"[Query] Query completed tenant={user_context.tenant_id} "
             f"user={user_context.id} request_id={request_id} "
+            f"retrieval_strategy={retrieval_response.strategy.value} "
             f"candidates={len(retrieval_response.candidates)} "
             f"context_chunks={len(context_response.context)} synthesis_enabled={synthesis_enabled} "
             f"confidence_score={confidence_score} "
@@ -380,7 +566,7 @@ def run_bm25_query(
             context=context_response.context,
             context_token_count=context_response.token_count,
             confidence_score=confidence_score,
-            retrieval_strategy=RetrievalStrategy.BM25,
+            retrieval_strategy=retrieval_response.strategy,
             latency_ms=latency_ms,
             synthesis_enabled=synthesis_enabled,
             llm_provider=llm_provider,
@@ -401,9 +587,11 @@ def run_bm25_query(
                 response.cache_write_status = QueryCacheWriteStatus.SKIPPED
                 response.cache_ttl_seconds = None
                 logger.info(
-                    f"[Query] BM25 query cache write skipped "
+                    f"[Query] Query cache write skipped "
                     f"tenant={user_context.tenant_id} user={user_context.id} "
-                    f"request_id={request_id} synthesis_error={synthesis_error}"
+                    f"request_id={request_id} "
+                    f"retrieval_strategy={retrieval_response.strategy.value} "
+                    f"synthesis_error={synthesis_error}"
                 )
             else:
                 try:
@@ -420,17 +608,20 @@ def run_bm25_query(
                         ),
                     )
                     logger.info(
-                        f"[Query] BM25 query cached tenant={user_context.tenant_id} "
+                        f"[Query] Query cached tenant={user_context.tenant_id} "
                         f"user={user_context.id} request_id={request_id} "
+                        f"retrieval_strategy={retrieval_response.strategy.value} "
                         f"ttl_seconds={settings.query_cache_ttl_seconds}"
                     )
                 except (RedisError, TypeError, ValueError) as e:
                     response.cache_write_status = QueryCacheWriteStatus.FAILED
                     response.cache_ttl_seconds = None
                     logger.warning(
-                        f"[Query] BM25 query cache write skipped "
+                        f"[Query] Query cache write skipped "
                         f"tenant={user_context.tenant_id} user={user_context.id} "
-                        f"request_id={request_id} error_type={type(e).__name__}"
+                        f"request_id={request_id} "
+                        f"retrieval_strategy={retrieval_response.strategy.value} "
+                        f"error_type={type(e).__name__}"
                     )
 
         if db is not None and query_run is not None:

@@ -687,7 +687,8 @@ GET  /query/{agent_run_id}
 POST /query/{agent_run_id}/cancel
 ```
 
-The query flow is retrieval-first. It calls BM25 retrieval, builds a safe
+The query flow is retrieval-first. It calls the requested BM25, vector, or
+hybrid retrieval strategy, builds a safe
 authorized context with citations, and optionally sends only that sanitized
 context to the LLM gateway when `LLM_SYNTHESIS_ENABLED=true`. Every query run is
 persisted tenant-scoped before retrieval starts, then marked completed or failed
@@ -709,12 +710,12 @@ user query
 -> returns citations
 ```
 
-The current query path implements this incrementally with BM25 retrieval,
-context building, deterministic confidence scoring, and deterministic answer
-verification first. Later steps add planner/tool routing, reformulation, vector
-search, web search, and full agent runtime.
+The current query path implements this incrementally with BM25, vector, and
+hybrid retrieval, context building, deterministic confidence scoring, and
+deterministic answer verification first. Later steps add planner/tool routing,
+reformulation, web search, and full agent runtime.
 
-The BM25 query path can optionally check Redis for a completed response before
+The query path can optionally check Redis for a completed response before
 running retrieval. The cache key is scoped by tenant, workspace, user, roles,
 groups, scopes, ACL version, retrieval filters, limits, retrieval strategy, and
 LLM synthesis/model settings. Cached responses are returned under the current
@@ -1158,9 +1159,10 @@ failure count, and retry-after seconds through
 Configuration:
 
 ```text
-LLM_SYNTHESIS_ENABLED=false
+LLM_SYNTHESIS_ENABLED=true
 LLM_PROVIDER=litellm
-DEFAULT_LLM_MODEL=ollama/llama3.1
+DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
+DEFAULT_SMALL_MODEL=gemini/gemini-2.5-flash
 LLM_TEMPERATURE=0.1
 LLM_MAX_TOKENS=700
 LLM_MAX_INPUT_CHARS=64000
@@ -1182,6 +1184,7 @@ EMBEDDING_PROVIDER=litellm
 EMBEDDING_MODEL_NAME=gemini/gemini-embedding-001
 EMBEDDING_DIMENSION=768
 GEMINI_API_KEY=
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 ### AuthZ Service

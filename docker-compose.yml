@@ -64,8 +64,8 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
-      - DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-ollama/llama3.1}
-      - DEFAULT_SMALL_MODEL=${DEFAULT_SMALL_MODEL:-ollama/llama3.1}
+      - DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-gemini/gemini-2.5-flash}
+      - DEFAULT_SMALL_MODEL=${DEFAULT_SMALL_MODEL:-gemini/gemini-2.5-flash}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-700}

@@ -63,6 +63,7 @@ curl -X POST http://localhost:8100/query \
     "query": "What does this document describe?",
     "workspace_id": "local-workspace",
     "filters": {"workspace_id": "local-workspace"},
+    "retrieval_strategy": "hybrid",
     "retrieval_limit": 5,
     "max_context_chunks": 3,
     "max_context_tokens": 1000
@@ -214,6 +215,7 @@ The Docker Compose stack reads `.env` and routes service URLs to Docker service 
 | `LLM_SYNTHESIS_ENABLED` | Enables answer generation after retrieval |
 | `LLM_PROVIDER` | Chat completion provider |
 | `DEFAULT_LLM_MODEL` | Default answer model |
+| `GEMINI_API_KEY` | Gemini API key for local embedding and answer models |
 | `OLLAMA_BASE_URL` | Local Ollama endpoint |
 
 ### Manual Local API Run
@@ -236,7 +238,7 @@ FastAPI API
   |-- documents/upload -> object storage -> ingestion_jobs
   |-- documents/{id}/ingestion-jobs -> ingestion status
   |-- retrieval/* -> BM25, vector, hybrid, rerank
-  |-- query -> BM25 retrieval -> context -> optional LLM synthesis
+  |-- query -> BM25/vector/hybrid retrieval -> context -> optional LLM synthesis
   |
   +--> PostgreSQL + pgvector
   +--> Redis

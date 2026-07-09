@@ -156,6 +156,41 @@ def test_generate_chat_completion_uses_ollama_base_url(monkeypatch) -> None:
     assert captured["base_url"] == "http://ollama:11434"
 
 
+def test_generate_chat_completion_uses_gemini_api_key(monkeypatch) -> None:
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("agentic_rag.llm.gateway.litellm_completion", fake_completion)
+    monkeypatch.setattr(
+        "agentic_rag.llm.gateway.settings.default_llm_model",
+        "gemini/gemini-2.5-flash",
+    )
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.gemini_api_key", "gemini-secret")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_output_tokens", 8000)
+
+    response = generate_chat_completion(
+        ChatCompletionRequest(
+            messages=[
+                LLMMessage(role="user", content="Question and context."),
+            ],
+        )
+    )
+
+    assert captured["model"] == "gemini/gemini-2.5-flash"
+    assert captured["api_key"] == "gemini-secret"
+    assert "base_url" not in captured
+    assert response.model == "gemini/gemini-2.5-flash"
+
+
 def test_generate_chat_completion_rejects_empty_response(monkeypatch) -> None:
     class EmptyResponse:
         choices: list[object] = []
@@ -242,6 +277,7 @@ def test_generate_chat_completion_retries_transient_failure(monkeypatch) -> None
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_provider", "litellm")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.gemini_api_key", "gemini-secret")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_max_input_chars", 1000)
@@ -759,6 +795,7 @@ def test_generate_embeddings_sends_dimensions_for_gemini(monkeypatch) -> None:
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.embedding_max_input_chars", 1000)
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.llm_api_key", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_api_key", "")
+    monkeypatch.setattr("agentic_rag.llm.gateway.settings.gemini_api_key", "gemini-secret")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.litellm_base_url", "")
     monkeypatch.setattr("agentic_rag.llm.gateway.settings.ollama_base_url", "")
 
@@ -775,6 +812,7 @@ def test_generate_embeddings_sends_dimensions_for_gemini(monkeypatch) -> None:
 
     assert captured["model"] == "gemini/gemini-embedding-001"
     assert captured["dimensions"] == 768
+    assert captured["api_key"] == "gemini-secret"
     assert response.dimension == 768
 
 

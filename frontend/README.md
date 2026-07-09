@@ -67,4 +67,5 @@ For local development, the frontend defaults are:
 VITE_API_BASE_URL=/api
 VITE_AUTH_TOKEN=local-dev-token
 VITE_WORKSPACE_ID=local-workspace
+VITE_QUERY_STRATEGY=hybrid
 ```

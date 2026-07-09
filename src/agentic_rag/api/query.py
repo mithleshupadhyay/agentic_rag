@@ -295,11 +295,12 @@ def query_endpoint(
 ) -> QueryResponse:
     request_id = getattr(request.state, "request_id", None)
     started_at = time.perf_counter()
-    retrieval_strategy_label = RetrievalStrategy.BM25.value
+    retrieval_strategy_label = payload.retrieval_strategy.value
     synthesis_enabled_label = "false"
     logger.info(
         f"[QueryAPI] Query started tenant={user_context.tenant_id} "
-        f"user={user_context.id} request_id={request_id}"
+        f"user={user_context.id} request_id={request_id} "
+        f"retrieval_strategy={retrieval_strategy_label}"
     )
     QUERY_LIFECYCLE_TOTAL.labels(
         status="started",
@@ -358,7 +359,7 @@ def query_stream_endpoint(
     request_id = getattr(request.state, "request_id", None)
     agent_run_id = uuid4()
     started_at = time.perf_counter()
-    retrieval_strategy_label = RetrievalStrategy.BM25.value
+    retrieval_strategy_label = payload.retrieval_strategy.value
     synthesis_enabled_label = "false"
     logger.info(
         f"[QueryAPI] Streaming query started tenant={user_context.tenant_id} "

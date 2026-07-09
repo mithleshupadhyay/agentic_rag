@@ -253,16 +253,17 @@ class Settings(BaseSettings):
     )
     llm_provider: str = Field(default="litellm", validation_alias="LLM_PROVIDER")
     default_llm_model: str = Field(
-        default="ollama/llama3.1",
+        default="gemini/gemini-2.5-flash",
         validation_alias="DEFAULT_LLM_MODEL",
     )
     default_small_model: str = Field(
-        default="ollama/llama3.1",
+        default="gemini/gemini-2.5-flash",
         validation_alias="DEFAULT_SMALL_MODEL",
     )
     llm_api_key: str = Field(default="", validation_alias="LLM_API_KEY")
     litellm_base_url: str = Field(default="", validation_alias="LITELLM_BASE_URL")
     litellm_api_key: str = Field(default="", validation_alias="LITELLM_API_KEY")
+    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
     ollama_base_url: str = Field(
         default="http://localhost:11434",
         validation_alias="OLLAMA_BASE_URL",

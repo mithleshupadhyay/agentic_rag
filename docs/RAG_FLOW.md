@@ -392,7 +392,7 @@ There are two query styles:
 
 | Endpoint | Behavior |
 |---|---|
-| `POST /query` | Non-streaming BM25 query path through `run_bm25_query` |
+| `POST /query` | Non-streaming strategy-aware query path for BM25, vector, or hybrid retrieval |
 | `POST /query/stream` | Streaming LangGraph agent runtime path |
 | `POST /retrieval/bm25-search` | Direct BM25 retrieval API |
 | `POST /retrieval/vector-search` | Direct vector retrieval API |
@@ -661,7 +661,7 @@ BM25 scores. In this project we search `content^3`, `document_title^2`, and
 ### What happens when a user chats?
 
 For `POST /query`, the API creates a query run, optionally checks Redis cache,
-runs BM25 retrieval against OpenSearch with ACL filters, builds a token-limited
+runs the requested retrieval strategy with ACL filters, builds a token-limited
 context, optionally calls the LLM to synthesize an answer, verifies grounding
 against citations, records the run, and returns the answer plus citations and
 context.

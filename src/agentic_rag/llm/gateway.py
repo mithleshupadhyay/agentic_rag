@@ -30,6 +30,17 @@ from agentic_rag.shared.schemas.llm import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_provider_api_key(model: str) -> str:
+    api_key = settings.llm_api_key or settings.litellm_api_key
+    if api_key:
+        return api_key
+
+    if model.startswith("gemini/"):
+        return settings.gemini_api_key
+
+    return ""
+
+
 def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
     model = request.model or settings.default_llm_model
     provider = request.provider or settings.llm_provider
@@ -87,7 +98,7 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         "timeout": timeout_seconds,
     }
 
-    api_key = settings.llm_api_key or settings.litellm_api_key
+    api_key = resolve_provider_api_key(model)
     if api_key:
         completion_kwargs["api_key"] = api_key
 
@@ -270,7 +281,7 @@ def stream_chat_completion(request: ChatCompletionRequest) -> Iterator[LLMStream
         "stream": True,
     }
 
-    api_key = settings.llm_api_key or settings.litellm_api_key
+    api_key = resolve_provider_api_key(model)
     if api_key:
         completion_kwargs["api_key"] = api_key
 
@@ -521,7 +532,7 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
     if model.startswith("gemini/"):
         embedding_kwargs["dimensions"] = settings.embedding_dimension
 
-    api_key = settings.llm_api_key or settings.litellm_api_key
+    api_key = resolve_provider_api_key(model)
     if api_key:
         embedding_kwargs["api_key"] = api_key
 
