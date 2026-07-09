@@ -579,6 +579,7 @@ function App() {
 
       const uploadedDocument = upload.document;
       setSelectedDocumentIds([uploadedDocument.id]);
+      setLatestResponse(null);
       setMessages((current) => [
         ...current,
         {
@@ -606,6 +607,8 @@ function App() {
 
       await refreshDocuments();
       await openDocument(uploadedDocument.id);
+      setSelectedDocumentIds([uploadedDocument.id]);
+      setLatestResponse(null);
 
       const finalStatus = completedJob?.status || "running";
       const finalMessage =
@@ -657,6 +660,8 @@ function App() {
       setSourceTitle("");
       await refreshDocuments();
       await openDocument(document.id);
+      setSelectedDocumentIds([document.id]);
+      setLatestResponse(null);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : String(error));
     } finally {
@@ -718,12 +723,15 @@ function App() {
       const document = await restoreDocument(apiSettings, documentId);
       await refreshDocuments();
       await openDocument(document.id);
+      setSelectedDocumentIds([document.id]);
+      setLatestResponse(null);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : String(error));
     }
   }
 
   function toggleDocumentSelection(documentId: string) {
+    setLatestResponse(null);
     setSelectedDocumentIds((current) => {
       if (current.includes(documentId)) {
         return current.filter((id) => id !== documentId);
@@ -733,10 +741,12 @@ function App() {
   }
 
   function selectAllReadyDocuments() {
+    setLatestResponse(null);
     setSelectedDocumentIds(readyDocuments.map((document) => document.id));
   }
 
   function clearDocumentSelection() {
+    setLatestResponse(null);
     setSelectedDocumentIds([]);
   }
 
@@ -1026,7 +1036,11 @@ function App() {
                   type="button"
                   className={`document-row document-${document.status}`}
                   key={document.id}
-                  onClick={() => toggleDocumentSelection(document.id)}
+                  disabled={document.status !== "ready"}
+                  onClick={() => {
+                    setSelectedDocumentIds([document.id]);
+                    setLatestResponse(null);
+                  }}
                 >
                   <span className="document-icon">
                     {document.status === "ready" ? <Check size={15} /> : <FileText size={15} />}
@@ -1382,7 +1396,7 @@ function ChatView({
           <div className="evidence-heading">
             <div>
               <h3>Evidence</h3>
-              <p>{latestContext.length} context chunks</p>
+              <p>{latestContext.length} latest answer context chunks</p>
             </div>
             <ShieldCheck size={20} />
           </div>

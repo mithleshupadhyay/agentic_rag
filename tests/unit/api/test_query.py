@@ -367,8 +367,10 @@ def test_query_endpoint_persists_synthesis_fallback(monkeypatch) -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["answer"] == (
-            "Retrieved 1 authorized context chunk, but answer synthesis failed. "
-            "Use the returned context and citations for review."
+            "LLM synthesis is temporarily unavailable, so I am returning "
+            "the best authorized retrieved excerpts instead.\n\n"
+            "I found these relevant excerpts in the selected documents:\n"
+            "- Security policy content. [1] Source: Security Policy."
         )
         assert body["synthesis_enabled"] is False
         assert body["synthesis_error"] == "LLM synthesis failed"

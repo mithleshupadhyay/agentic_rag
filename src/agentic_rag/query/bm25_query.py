@@ -32,6 +32,7 @@ from agentic_rag.shared.schemas.query import (
     QueryResponse,
 )
 from agentic_rag.shared.schemas.retrieval import (
+    CandidateChunk,
     ContextBuildRequest,
     ContextChunk,
     RetrievalStrategy,
@@ -108,8 +109,8 @@ def build_extractive_answer(
 
             passage_candidates.append(
                 (
-                    overlap_count,
                     -context_index,
+                    overlap_count,
                     -segment_index,
                     title,
                     f"{segment} [{context_index}]",
@@ -133,8 +134,8 @@ def build_extractive_answer(
 
             passage_candidates.append(
                 (
-                    0,
                     -context_index,
+                    0,
                     0,
                     title,
                     f"{content} [{context_index}]",
@@ -361,10 +362,55 @@ def run_bm25_query(
                 limit=request.retrieval_limit,
             )
 
+        context_candidates = retrieval_response.candidates
+        if len(filters.document_ids) > 1 and retrieval_response.candidates:
+            query_terms = set(re.findall(r"[a-z0-9]+", query_text.lower()))
+            selected_document_ids = [str(document_id) for document_id in filters.document_ids]
+            selected_document_id_set = set(selected_document_ids)
+            best_candidate_by_document: dict[str, tuple[int, CandidateChunk]] = {}
+            for index, candidate in enumerate(retrieval_response.candidates):
+                document_id = str(candidate.document_id)
+                if document_id not in selected_document_id_set:
+                    continue
+                if document_id in best_candidate_by_document:
+                    continue
+                best_candidate_by_document[document_id] = (index, candidate)
+
+            if len(best_candidate_by_document) > 1:
+                representative_candidates: list[tuple[int, int, CandidateChunk]] = []
+                for document_id, (index, candidate) in best_candidate_by_document.items():
+                    title = ""
+                    if candidate.citation and candidate.citation.title:
+                        title = candidate.citation.title
+                    elif isinstance(candidate.metadata.get("file_name"), str):
+                        title = str(candidate.metadata["file_name"])
+
+                    title_terms = set(re.findall(r"[a-z0-9]+", title.lower()))
+                    title_match_count = len(query_terms & title_terms)
+                    representative_candidates.append(
+                        (-title_match_count, index, candidate)
+                    )
+
+                representative_candidates.sort(key=lambda item: (item[0], item[1]))
+                reordered_candidates = []
+                seen_chunk_ids = set()
+                for _title_rank, _index, candidate in representative_candidates:
+                    reordered_candidates.append(candidate)
+                    seen_chunk_ids.add(str(candidate.chunk_id))
+
+                for candidate in retrieval_response.candidates:
+                    chunk_id = str(candidate.chunk_id)
+                    if chunk_id in seen_chunk_ids:
+                        continue
+                    reordered_candidates.append(candidate)
+                    seen_chunk_ids.add(chunk_id)
+
+                context_candidates = reordered_candidates
+
         context_response = build_context(
             ContextBuildRequest(
                 query=query_text,
-                chunks=retrieval_response.candidates,
+                chunks=context_candidates,
                 max_context_chunks=request.max_context_chunks,
                 max_tokens=request.max_context_tokens,
             )
@@ -530,13 +576,10 @@ def run_bm25_query(
                     f"user={user_context.id} request_id={request_id} "
                     f"error_type={synthesis_error_type}"
                 )
-                context_chunk_label = (
-                    "chunk" if len(context_response.context) == 1 else "chunks"
-                )
                 answer = (
-                    f"Retrieved {len(context_response.context)} authorized context "
-                    f"{context_chunk_label}, but answer synthesis failed. "
-                    "Use the returned context and citations for review."
+                    "LLM synthesis is temporarily unavailable, so I am returning "
+                    "the best authorized retrieved excerpts instead.\n\n"
+                    f"{answer}"
                 )
                 synthesis_error = "LLM synthesis failed"
                 verification_status = AnswerVerificationStatus.SKIPPED

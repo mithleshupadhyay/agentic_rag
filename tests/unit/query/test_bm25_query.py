@@ -228,6 +228,117 @@ def test_run_bm25_query_uses_requested_hybrid_strategy(monkeypatch) -> None:
     assert captured["limit"] == 6
 
 
+def test_run_bm25_query_balances_context_across_selected_documents(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    resume_document_id = uuid4()
+    report_document_id = uuid4()
+    report_chunk_id = uuid4()
+    second_report_chunk_id = uuid4()
+    resume_chunk_id = uuid4()
+
+    def fake_search_hybrid_chunks(db, user_context, query, filters, limit):
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.HYBRID,
+            candidates=[
+                CandidateChunk(
+                    chunk_id=report_chunk_id,
+                    document_id=report_document_id,
+                    content="Receivable recovery report prepared by Mithlesh Upadhyay.",
+                    score=0.91,
+                    source=RetrievalStrategy.HYBRID.value,
+                    metadata={"token_count": 7},
+                    citation=Citation(
+                        document_id=report_document_id,
+                        chunk_id=report_chunk_id,
+                        title="MSME_Overdue_Payment_Recovery_Audit_Report_Format.pdf",
+                        quote="Receivable recovery report prepared by Mithlesh Upadhyay.",
+                        score=0.91,
+                    ),
+                ),
+                CandidateChunk(
+                    chunk_id=second_report_chunk_id,
+                    document_id=report_document_id,
+                    content="The report explains follow-up and escalation responsibilities.",
+                    score=0.88,
+                    source=RetrievalStrategy.HYBRID.value,
+                    metadata={"token_count": 7},
+                    citation=Citation(
+                        document_id=report_document_id,
+                        chunk_id=second_report_chunk_id,
+                        title="MSME_Overdue_Payment_Recovery_Audit_Report_Format.pdf",
+                        quote="The report explains follow-up and escalation responsibilities.",
+                        score=0.88,
+                    ),
+                ),
+                CandidateChunk(
+                    chunk_id=resume_chunk_id,
+                    document_id=resume_document_id,
+                    content="Mithlesh Upadhyay is a Software Engineer II in AI backend systems.",
+                    score=0.62,
+                    source=RetrievalStrategy.HYBRID.value,
+                    metadata={"token_count": 10},
+                    citation=Citation(
+                        document_id=resume_document_id,
+                        chunk_id=resume_chunk_id,
+                        title="Mithlesh_Upadhyay_Updated_Resume.pdf",
+                        quote="Mithlesh Upadhyay is a Software Engineer II in AI backend systems.",
+                        score=0.62,
+                    ),
+                ),
+            ],
+            latency_ms=14,
+        )
+
+    monkeypatch.setattr(
+        "agentic_rag.query.bm25_query.search_hybrid_chunks",
+        fake_search_hybrid_chunks,
+    )
+
+    with Session(engine) as db:
+        db.add(
+            Tenant(
+                tenant_id="tenant-a",
+                name="Tenant A",
+                slug="tenant-a",
+                status="active",
+                metadata_={},
+            )
+        )
+        db.commit()
+        user_context = UserContext(
+            id="user-1",
+            customer_id="tenant-a",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            scopes=["query:run"],
+        )
+
+        response = run_bm25_query(
+            user_context=user_context,
+            request=QueryRequest(
+                query="who is Mithlesh?",
+                workspace_id="workspace-a",
+                retrieval_strategy=RetrievalStrategy.HYBRID,
+                retrieval_limit=6,
+                max_context_chunks=2,
+                max_context_tokens=500,
+                filters={
+                    "workspace_id": "workspace-a",
+                    "document_ids": [resume_document_id, report_document_id],
+                },
+            ),
+            db=db,
+        )
+
+    assert [context.citation.title for context in response.context] == [
+        "Mithlesh_Upadhyay_Updated_Resume.pdf",
+        "MSME_Overdue_Payment_Recovery_Audit_Report_Format.pdf",
+    ]
+    assert "Mithlesh Upadhyay is a Software Engineer II" in response.answer
+    assert "Receivable recovery report prepared by Mithlesh Upadhyay" in response.answer
+
+
 def test_build_extractive_answer_marks_partial_excerpt_without_fake_sentence() -> None:
     document_id = uuid4()
     chunk_id = uuid4()
@@ -652,8 +763,10 @@ def test_run_bm25_query_returns_context_when_synthesis_fails(monkeypatch) -> Non
     assert response.context[0].content == "Security policy content."
     assert response.citations[0].title == "Security Policy"
     assert response.answer == (
-        "Retrieved 1 authorized context chunk, but answer synthesis failed. "
-        "Use the returned context and citations for review."
+        "LLM synthesis is temporarily unavailable, so I am returning "
+        "the best authorized retrieved excerpts instead.\n\n"
+        "I found these relevant excerpts in the selected documents:\n"
+        "- Security policy content. [1] Source: Security Policy."
     )
     assert fake_redis.get_calls
     assert fake_redis.setex_calls == []
