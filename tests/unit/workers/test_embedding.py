@@ -367,9 +367,10 @@ def test_handle_embedding_event_processes_scoped_chunks(
         payload={
             "job_id": str(chunk.document_id),
             "document_id": str(chunk.document_id),
-            "chunk_ids": [str(chunk.id)],
-            "embedding_model": "text-embedding-test",
-            "vector_version": 1,
+                "chunk_ids": [str(chunk.id)],
+                "embedding_model": "text-embedding-test",
+                "embedding_dimension": 768,
+                "vector_version": 1,
         },
     )
 

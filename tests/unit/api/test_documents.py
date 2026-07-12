@@ -137,8 +137,14 @@ class FakeObjectStore:
         workspace_id: str | None,
         document_id,
         file_name: str,
+        department_id=None,
     ) -> str:
         workspace = workspace_id or "default"
+        if department_id is not None:
+            return (
+                f"tenants/{tenant_id}/departments/{department_id}/"
+                f"workspaces/{workspace}/documents/{document_id}/raw/{file_name}"
+            )
         return (
             f"tenants/{tenant_id}/workspaces/{workspace}/"
             f"documents/{document_id}/raw/{file_name}"

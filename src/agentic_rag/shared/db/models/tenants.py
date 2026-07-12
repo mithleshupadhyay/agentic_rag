@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, Uuid, false
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    Uuid,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentic_rag.shared.db.base import (
@@ -27,6 +37,15 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default="active",
     )
     data_region: Mapped[str | None] = mapped_column(String(32))
+    plan: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="free",
+        server_default="free",
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    identity_provider: Mapped[str | None] = mapped_column(String(32))
+    external_organization_id: Mapped[str | None] = mapped_column(String(128))
     metadata_: Mapped[JsonDict] = mapped_column(
         "metadata",
         jsonb_type(),
@@ -35,7 +54,12 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     users = relationship("User", back_populates="tenant", lazy="selectin")
-    roles = relationship("Role", back_populates="tenant", lazy="selectin")
+    roles = relationship(
+        "Role",
+        back_populates="tenant",
+        foreign_keys="Role.tenant_id",
+        lazy="selectin",
+    )
     groups = relationship("Group", back_populates="tenant", lazy="selectin")
     documents = relationship("Document", back_populates="tenant", lazy="selectin")
     ingestion_jobs = relationship(
@@ -53,23 +77,68 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="tenant",
         lazy="selectin",
     )
+    llm_providers = relationship(
+        "LLMProvider",
+        back_populates="tenant",
+        lazy="selectin",
+    )
+    memberships = relationship(
+        "TenantMembership",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    departments = relationship(
+        "Department",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    workspaces = relationship(
+        "Workspace",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     __table_args__ = (
+        UniqueConstraint(
+            "identity_provider",
+            "external_organization_id",
+            name="uq_tenants_identity_organization",
+        ),
         Index("ix_tenants_status_region", "status", "data_region"),
+        Index(
+            "ix_tenants_identity_organization",
+            "identity_provider",
+            "external_organization_id",
+        ),
     )
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
-    tenant_id: Mapped[str] = mapped_column(
+    tenant_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
-    external_subject: Mapped[str] = mapped_column(String(256), nullable=False)
+    external_subject: Mapped[str | None] = mapped_column(String(256))
     email: Mapped[str | None] = mapped_column(String(320))
+    primary_email: Mapped[str | None] = mapped_column(String(320))
+    normalized_email: Mapped[str | None] = mapped_column(
+        String(320),
+        unique=True,
+        index=True,
+    )
+    username: Mapped[str | None] = mapped_column(String(128))
+    normalized_username: Mapped[str | None] = mapped_column(
+        String(128),
+        unique=True,
+        index=True,
+    )
     display_name: Mapped[str | None] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(
         String(32),
@@ -82,6 +151,19 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=1,
         server_default="1",
     )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[JsonDict] = mapped_column(
         "metadata",
         jsonb_type(),
@@ -102,6 +184,24 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    identities = relationship(
+        "AuthIdentity",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    tenant_memberships = relationship(
+        "TenantMembership",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    department_memberships = relationship(
+        "DepartmentMembership",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -118,13 +218,25 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "roles"
 
-    tenant_id: Mapped[str] = mapped_column(
+    tenant_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    tenant_uuid: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         index=True,
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    slug: Mapped[str | None] = mapped_column(String(128))
+    scope: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="tenant",
+        server_default="tenant",
+    )
     description: Mapped[str | None] = mapped_column(String(1024))
     is_system: Mapped[bool] = mapped_column(
         Boolean,
@@ -132,10 +244,28 @@ class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=False,
         server_default=false(),
     )
+    is_mutable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
 
-    tenant = relationship("Tenant", back_populates="roles", lazy="select")
+    tenant = relationship(
+        "Tenant",
+        back_populates="roles",
+        foreign_keys=[tenant_id],
+        lazy="select",
+    )
     user_links = relationship(
         "UserRole",
+        back_populates="role",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    permission_links = relationship(
+        "RolePermission",
         back_populates="role",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -143,6 +273,13 @@ class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="uq_roles_tenant_name"),
+        UniqueConstraint(
+            "tenant_uuid",
+            "scope",
+            "slug",
+            name="uq_roles_tenant_scope_slug",
+        ),
+        Index("ix_roles_tenant_scope", "tenant_uuid", "scope"),
     )
 
 

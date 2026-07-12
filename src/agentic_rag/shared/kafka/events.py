@@ -25,7 +25,10 @@ class EventEnvelope(APIModel):
     event_type: EventType | str
     event_version: int = Field(default=1, ge=1)
     tenant_id: str = Field(..., min_length=1)
+    department_id: UUID | None = None
     workspace_id: str | None = None
+    actor_user_id: str | None = None
+    request_id: str | None = None
     correlation_id: str = Field(..., min_length=1)
     causation_id: str | None = None
     idempotency_key: str | None = None
@@ -60,7 +63,9 @@ class EmbedChunksPayload(APIModel):
     job_id: UUID
     document_id: UUID
     chunk_ids: list[UUID] = Field(..., min_length=1)
+    provider_id: UUID | None = None
     embedding_model: str = Field(..., min_length=1)
+    embedding_dimension: int = Field(..., ge=1)
     vector_version: int = Field(default=1, ge=1)
 
 

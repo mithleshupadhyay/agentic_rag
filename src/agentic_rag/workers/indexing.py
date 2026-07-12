@@ -43,6 +43,7 @@ def process_bm25_index_batch(
     search_client: Optional[OpenSearchClient] = None,
     limit: Optional[int] = None,
     tenant_id: Optional[str] = None,
+    department_id: Optional[UUID] = None,
     document_id: Optional[UUID] = None,
     chunk_ids: Optional[list[UUID]] = None,
     source: str = "direct",
@@ -61,6 +62,7 @@ def process_bm25_index_batch(
         limit=limit or settings.bm25_index_batch_size,
         index_name=index_name,
         tenant_id=tenant_id,
+        department_id=department_id,
         document_id=document_id,
         chunk_ids=chunk_ids,
     )
@@ -206,6 +208,7 @@ def handle_indexing_event(
             search_client=active_search_client,
             limit=len(payload.chunk_ids),
             tenant_id=envelope.tenant_id,
+            department_id=envelope.department_id,
             document_id=payload.document_id,
             chunk_ids=payload.chunk_ids,
             source="index_event",

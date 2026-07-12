@@ -240,6 +240,7 @@ def test_kafka_event_envelope_and_payload() -> None:
         document_id=uuid4(),
         chunk_ids=[uuid4()],
         embedding_model="gemini/gemini-embedding-001",
+        embedding_dimension=768,
     )
     envelope = EventEnvelope(
         event_type=EventType.DOCUMENT_EMBED_REQUESTED,
@@ -250,6 +251,7 @@ def test_kafka_event_envelope_and_payload() -> None:
 
     assert envelope.event_version == 1
     assert envelope.payload["embedding_model"] == "gemini/gemini-embedding-001"
+    assert envelope.payload["embedding_dimension"] == 768
 
 
 def test_kafka_document_parse_event_payload() -> None:

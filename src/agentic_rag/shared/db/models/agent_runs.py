@@ -24,6 +24,11 @@ class AgentRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
+        index=True,
+    )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
     user_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -83,6 +88,12 @@ class AgentRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "created_at",
         ),
         Index("ix_agent_runs_tenant_timeout", "tenant_id", "timeout_at"),
+        Index(
+            "ix_agent_runs_tenant_department_created",
+            "tenant_id",
+            "department_id",
+            "created_at",
+        ),
     )
 
 

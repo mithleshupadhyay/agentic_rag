@@ -21,6 +21,119 @@ export type HealthResponse = {
   >;
 };
 
+export type AuthSession = {
+  user_id: string;
+  tenant_id: string;
+  tenant_uuid: string | null;
+  department_id: string | null;
+  workspace_id: string | null;
+  email: string | null;
+  roles: string[];
+  group_ids: string[];
+  scopes: string[];
+  tenant_permissions: string[];
+  department_permissions: Record<string, string[]>;
+  must_change_password: boolean;
+  acl_version: number;
+  auth_provider: string;
+};
+
+export type TenantUserRole = "viewer" | "user" | "admin";
+
+export type TenantUser = {
+  id: string;
+  tenant_id: string;
+  external_subject: string;
+  email: string | null;
+  display_name: string | null;
+  status: string;
+  roles: string[];
+  workspace_id: string | null;
+  acl_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantUserListResponse = {
+  items: TenantUser[];
+  page: PageResponse;
+};
+
+export type UserInvitationRequest = {
+  email: string;
+  display_name?: string | null;
+  role: TenantUserRole;
+  workspace_id?: string | null;
+};
+
+export type UserInvitationResponse = {
+  user: TenantUser;
+  invitation_email_sent: boolean;
+  identity_invitation_id: string;
+};
+
+export type LLMProviderType =
+  | "google"
+  | "openai"
+  | "anthropic"
+  | "azure"
+  | "ollama"
+  | "litellm"
+  | "openai_compatible";
+
+export type LLMProvider = {
+  id: string;
+  tenant_id: string;
+  name: string;
+  provider_type: LLMProviderType;
+  chat_model: string | null;
+  embedding_model: string | null;
+  embedding_dimension: number | null;
+  base_url: string | null;
+  has_api_key: boolean;
+  config: JsonObject;
+  is_active: boolean;
+  is_default_chat: boolean;
+  is_default_embedding: boolean;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LLMProviderCreateRequest = {
+  name: string;
+  provider_type: LLMProviderType;
+  chat_model?: string | null;
+  embedding_model?: string | null;
+  embedding_dimension?: number | null;
+  base_url?: string | null;
+  api_key?: string | null;
+  config: JsonObject;
+  is_active: boolean;
+  is_default_chat: boolean;
+  is_default_embedding: boolean;
+};
+
+export type LLMProviderUpdateRequest = Partial<
+  Omit<LLMProviderCreateRequest, "provider_type">
+> & {
+  clear_api_key?: boolean;
+};
+
+export type LLMProviderListResponse = {
+  items: LLMProvider[];
+  page: PageResponse;
+};
+
+export type LLMProviderValidationResponse = {
+  status: "healthy";
+  capability: "chat" | "embedding";
+  provider: string;
+  model: string;
+  latency_ms: number;
+};
+
 export type DocumentStatus = "queued" | "parsing" | "indexing" | "ready" | "failed" | "deleted";
 export type DocumentSourceType = "upload" | "s3" | "url" | "connector";
 export type ClassificationLevel = "public" | "internal" | "confidential" | "restricted";
@@ -38,6 +151,7 @@ export type AclPolicy = {
 export type DocumentRead = {
   id: string;
   tenant_id: string;
+  department_id: string | null;
   workspace_id: string | null;
   source_type: DocumentSourceType;
   source_uri: string | null;
@@ -62,6 +176,7 @@ export type DocumentRead = {
 export type DocumentListItem = {
   id: string;
   tenant_id: string;
+  department_id: string | null;
   workspace_id: string | null;
   title: string | null;
   file_name: string | null;
@@ -78,6 +193,7 @@ export type DocumentSearchRequest = {
     size: number;
   };
   workspace_id?: string | null;
+  department_ids?: string[];
   source_type?: DocumentSourceType | null;
   status?: DocumentStatus | null;
   owner_user_id?: string | null;
@@ -86,6 +202,7 @@ export type DocumentSearchRequest = {
 };
 
 export type DocumentCreateRequest = {
+  department_id?: string | null;
   workspace_id?: string | null;
   source_type: DocumentSourceType;
   source_uri?: string | null;
@@ -134,6 +251,7 @@ export type IngestionJobStatus = "queued" | "running" | "completed" | "failed" |
 export type IngestionJobRead = {
   id: string;
   tenant_id?: string;
+  department_id?: string | null;
   workspace_id?: string | null;
   document_id: string | null;
   source_type?: DocumentSourceType;
@@ -195,6 +313,7 @@ export type ContextChunk = {
 
 export type RetrievalFilters = {
   workspace_id?: string | null;
+  department_ids?: string[];
   document_ids?: string[];
   source_types?: string[];
   tags?: string[];
@@ -313,6 +432,9 @@ export type QueryRunSearchResponse = {
 export type ApiClientSettings = {
   apiBaseUrl: string;
   authToken: string;
+  tenantId?: string | null;
+  departmentId?: string | null;
+  workspaceId?: string | null;
 };
 
 export class ApiError extends Error {
@@ -357,12 +479,22 @@ export async function requestJson<T>(
   if (settings.authToken.trim()) {
     headers.set("Authorization", `Bearer ${settings.authToken.trim()}`);
   }
+  if (settings.tenantId) {
+    headers.set("X-Tenant-ID", settings.tenantId);
+  }
+  if (settings.departmentId) {
+    headers.set("X-Department-ID", settings.departmentId);
+  }
+  if (settings.workspaceId) {
+    headers.set("X-Workspace-ID", settings.workspaceId);
+  }
 
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers,
+      credentials: "include",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -388,6 +520,10 @@ export async function requestJson<T>(
     throw new ApiError(`API returned ${response.status}: ${detail}`, response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   try {
     return (await response.json()) as T;
   } catch (error) {
@@ -400,15 +536,226 @@ export async function checkReadiness(settings: ApiClientSettings): Promise<Healt
   return requestJson<HealthResponse>(settings, "/readiness");
 }
 
+export async function getAuthSession(
+  settings: ApiClientSettings,
+): Promise<AuthSession> {
+  return requestJson<AuthSession>(settings, "/auth/session");
+}
+
+export async function createTenant(
+  settings: ApiClientSettings,
+  name: string,
+  slug: string,
+): Promise<{ id: string; name: string; slug: string }> {
+  return requestJson(settings, "/api/v1/tenants", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, slug }),
+  });
+}
+
+export async function resolveInvitation(
+  settings: ApiClientSettings,
+  token: string,
+): Promise<{ tenant_name: string; invited_email: string }> {
+  const query = new URLSearchParams({ token }).toString();
+  return requestJson(settings, `/api/v1/invitations/resolve?${query}`);
+}
+
+export async function acceptInvitation(
+  settings: ApiClientSettings,
+): Promise<{ tenant_id: string; tenant_name: string }> {
+  return requestJson(settings, "/api/v1/invitations/accept", { method: "POST" });
+}
+
+export async function listTenantUsers(
+  settings: ApiClientSettings,
+  page: number,
+  size: number,
+): Promise<TenantUserListResponse> {
+  const query = buildSearchParams({ page, size });
+  if (settings.tenantId) {
+    const response = await requestJson<{
+      items: Array<{
+        id: string;
+        primary_email: string;
+        display_name: string | null;
+        membership_status: string;
+        tenant_role: { slug: string };
+        joined_at: string | null;
+      }>;
+      page: PageResponse;
+    }>(settings, `/api/v1/tenants/${settings.tenantId}/members${query}`);
+    return {
+      page: response.page,
+      items: response.items.map((member) => ({
+        id: member.id,
+        tenant_id: settings.tenantId || "",
+        external_subject: member.id,
+        email: member.primary_email,
+        display_name: member.display_name,
+        status: member.membership_status,
+        roles: [member.tenant_role.slug],
+        workspace_id: settings.workspaceId || null,
+        acl_version: 1,
+        created_at: member.joined_at || new Date(0).toISOString(),
+        updated_at: member.joined_at || new Date(0).toISOString(),
+      })),
+    };
+  }
+  return requestJson<TenantUserListResponse>(settings, `/admin/users${query}`);
+}
+
+export async function inviteTenantUser(
+  settings: ApiClientSettings,
+  invitation: UserInvitationRequest,
+): Promise<UserInvitationResponse> {
+  if (settings.tenantId) {
+    const roles = await requestJson<
+      Array<{ id: string; slug: string; scope: "tenant" | "department" }>
+    >(settings, `/api/v1/tenants/${settings.tenantId}/roles`);
+    const tenantRoleSlug = invitation.role === "admin" ? "tenant-admin" : "tenant-member";
+    const departmentRoleSlug = invitation.role === "admin" ? "department-admin" : "contributor";
+    const tenantRole = roles.find(
+      (role) => role.scope === "tenant" && role.slug === tenantRoleSlug,
+    );
+    const departmentRole = roles.find(
+      (role) => role.scope === "department" && role.slug === departmentRoleSlug,
+    );
+    if (!tenantRole) {
+      throw new ApiError(`Required role ${tenantRoleSlug} is not configured.`);
+    }
+    const assignments = settings.departmentId && departmentRole
+      ? [{ department_id: settings.departmentId, role_id: departmentRole.id }]
+      : [];
+    const response = await requestJson<{
+      invitation: {
+        id: string;
+        email: string;
+        display_name: string | null;
+        status: string;
+        created_at: string;
+      };
+    }>(settings, `/api/v1/tenants/${settings.tenantId}/invitations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: invitation.email,
+        display_name: invitation.display_name,
+        tenant_role_id: tenantRole.id,
+        department_assignments: assignments,
+      }),
+    });
+    return {
+      user: {
+        id: response.invitation.id,
+        tenant_id: settings.tenantId,
+        external_subject: response.invitation.id,
+        email: response.invitation.email,
+        display_name: response.invitation.display_name,
+        status: response.invitation.status,
+        roles: [tenantRole.slug],
+        workspace_id: settings.workspaceId || null,
+        acl_version: 1,
+        created_at: response.invitation.created_at,
+        updated_at: response.invitation.created_at,
+      },
+      invitation_email_sent: true,
+      identity_invitation_id: response.invitation.id,
+    };
+  }
+  return requestJson<UserInvitationResponse>(settings, "/admin/users/invitations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(invitation),
+  });
+}
+
+export async function listLLMProviders(
+  settings: ApiClientSettings,
+  page: number,
+  size: number,
+): Promise<LLMProviderListResponse> {
+  const query = buildSearchParams({ page, size });
+  return requestJson<LLMProviderListResponse>(
+    settings,
+    `/admin/llm-providers${query}`,
+  );
+}
+
+export async function createLLMProvider(
+  settings: ApiClientSettings,
+  request: LLMProviderCreateRequest,
+): Promise<LLMProvider> {
+  return requestJson<LLMProvider>(settings, "/admin/llm-providers", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+}
+
+export async function updateLLMProvider(
+  settings: ApiClientSettings,
+  providerId: string,
+  request: LLMProviderUpdateRequest,
+): Promise<LLMProvider> {
+  return requestJson<LLMProvider>(
+    settings,
+    `/admin/llm-providers/${providerId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+}
+
+export async function deleteLLMProvider(
+  settings: ApiClientSettings,
+  providerId: string,
+): Promise<void> {
+  return requestJson<void>(settings, `/admin/llm-providers/${providerId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function validateLLMProvider(
+  settings: ApiClientSettings,
+  providerId: string,
+  capability: "chat" | "embedding",
+): Promise<LLMProviderValidationResponse> {
+  return requestJson<LLMProviderValidationResponse>(
+    settings,
+    `/admin/llm-providers/${providerId}/validate`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ capability }),
+    },
+  );
+}
+
 export async function uploadDocument(
   settings: ApiClientSettings,
   file: File,
   workspaceId: string,
   title: string,
   metadata: JsonObject,
+  departmentId?: string | null,
 ): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
+  if (departmentId) {
+    formData.append("department_id", departmentId);
+  }
   formData.append("workspace_id", workspaceId.trim());
   formData.append("title", title.trim() || file.name);
   formData.append("metadata_json", JSON.stringify(metadata));

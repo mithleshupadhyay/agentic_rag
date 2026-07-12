@@ -10,9 +10,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@auth0/auth0-spa-js": "^2.11.0",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "supertokens-auth-react": "^0.51.2",
+    "supertokens-web-js": "^0.16.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

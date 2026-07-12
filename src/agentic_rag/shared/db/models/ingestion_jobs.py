@@ -24,6 +24,11 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
+        index=True,
+    )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
@@ -101,5 +106,11 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "tenant_id",
             "status",
             "next_retry_at",
+        ),
+        Index(
+            "ix_ingestion_jobs_tenant_department_status",
+            "tenant_id",
+            "department_id",
+            "status",
         ),
     )

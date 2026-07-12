@@ -5,7 +5,12 @@ from uuid import UUID
 
 from pydantic import Field
 
-from agentic_rag.shared.schemas.common import APIModel, Citation, JsonObject, PageResponse
+from agentic_rag.shared.schemas.common import (
+    APIModel,
+    Citation,
+    JsonObject,
+    PageResponse,
+)
 from agentic_rag.shared.schemas.retrieval import (
     CandidateChunk,
     ContextChunk,
@@ -80,7 +85,9 @@ class QueryResponse(APIModel):
     llm_output_tokens: int = Field(default=0, ge=0)
     llm_cost_estimate: float = Field(default=0.0, ge=0.0)
     synthesis_error: str | None = None
-    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_status: AnswerVerificationStatus = (
+        AnswerVerificationStatus.NOT_REQUIRED
+    )
     verification_reason: str | None = None
     cache_lookup_status: QueryCacheLookupStatus = QueryCacheLookupStatus.DISABLED
     cache_write_status: QueryCacheWriteStatus = QueryCacheWriteStatus.DISABLED
@@ -99,6 +106,7 @@ class QueryRunRead(APIModel):
     agent_run_id: UUID
     status: QueryRunStatus
     tenant_id: str
+    department_id: UUID | None = None
     workspace_id: str | None = None
     user_id: str
     request_id: str | None = None
@@ -120,7 +128,9 @@ class QueryRunRead(APIModel):
     llm_input_tokens: int = Field(default=0, ge=0)
     llm_output_tokens: int = Field(default=0, ge=0)
     llm_cost_estimate: float = Field(default=0.0, ge=0.0)
-    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_status: AnswerVerificationStatus = (
+        AnswerVerificationStatus.NOT_REQUIRED
+    )
     verification_reason: str | None = None
     error_type: str | None = None
     error_message: str | None = None
@@ -134,6 +144,7 @@ class QueryRunRead(APIModel):
 class QueryRunListItem(APIModel):
     agent_run_id: UUID
     status: QueryRunStatus
+    department_id: UUID | None = None
     workspace_id: str | None = None
     user_id: str
     request_id: str | None = None
@@ -143,7 +154,9 @@ class QueryRunListItem(APIModel):
     synthesis_enabled: bool = False
     llm_provider: str | None = None
     llm_model: str | None = None
-    verification_status: AnswerVerificationStatus = AnswerVerificationStatus.NOT_REQUIRED
+    verification_status: AnswerVerificationStatus = (
+        AnswerVerificationStatus.NOT_REQUIRED
+    )
     verification_reason: str | None = None
     latency_ms: int | None = Field(default=None, ge=0)
     created_at: datetime

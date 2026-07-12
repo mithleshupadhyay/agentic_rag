@@ -16,6 +16,33 @@ services:
       - APP_VERSION=${APP_VERSION:-0.1.0}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8100,http://127.0.0.1:8100}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-local}
+      - SUPERTOKENS_CONNECTION_URI=${SUPERTOKENS_CONNECTION_URI:-http://supertokens:3567}
+      - SUPERTOKENS_API_KEY=${SUPERTOKENS_API_KEY:-change-this-development-supertokens-api-key}
+      - SUPERTOKENS_APP_NAME=${SUPERTOKENS_APP_NAME:-Agentic RAG}
+      - SUPERTOKENS_API_DOMAIN=${SUPERTOKENS_API_DOMAIN:-http://localhost:8100}
+      - SUPERTOKENS_WEBSITE_DOMAIN=${SUPERTOKENS_WEBSITE_DOMAIN:-http://localhost:5173}
+      - SUPERTOKENS_API_BASE_PATH=${SUPERTOKENS_API_BASE_PATH:-/auth}
+      - SUPERTOKENS_WEBSITE_BASE_PATH=${SUPERTOKENS_WEBSITE_BASE_PATH:-/auth}
+      - SUPERTOKENS_COOKIE_DOMAIN=${SUPERTOKENS_COOKIE_DOMAIN:-}
+      - SUPERTOKENS_COOKIE_SECURE=${SUPERTOKENS_COOKIE_SECURE:-false}
+      - SUPERTOKENS_COOKIE_SAME_SITE=${SUPERTOKENS_COOKIE_SAME_SITE:-lax}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - PUBLIC_TENANT_SIGNUP_ENABLED=${PUBLIC_TENANT_SIGNUP_ENABLED:-true}
+      - INVITE_EXPIRY_HOURS=${INVITE_EXPIRY_HOURS:-48}
+      - INVITATION_CONTEXT_SECRET=${INVITATION_CONTEXT_SECRET:-change-this-development-invitation-context-secret}
+      - TEMPORARY_PASSWORD_PROVISIONING_ENABLED=${TEMPORARY_PASSWORD_PROVISIONING_ENABLED:-true}
+      - EMAIL_DELIVERY_PROVIDER=${EMAIL_DELIVERY_PROVIDER:-smtp}
+      - SMTP_HOST=${SMTP_HOST:-mailpit}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-false}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@agentic-rag.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Agentic RAG}
+      - SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@agentic-rag.local}
       - LOCAL_AUTH_TOKEN=${LOCAL_AUTH_TOKEN:-local-dev-token}
       - LOCAL_USER_ID=${LOCAL_USER_ID:-local-user}
       - LOCAL_TENANT_ID=${LOCAL_TENANT_ID:-local-tenant}
@@ -27,6 +54,18 @@ services:
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
       - OIDC_AUDIENCE=${OIDC_AUDIENCE:-}
       - OIDC_JWKS_URL=${OIDC_JWKS_URL:-}
+      - OIDC_FRONTEND_CLIENT_ID=${OIDC_FRONTEND_CLIENT_ID:-}
+      - OIDC_FRONTEND_SCOPE=${OIDC_FRONTEND_SCOPE:-openid profile email}
+      - OIDC_IDENTITY_PROVIDERS=${OIDC_IDENTITY_PROVIDERS:-}
+      - OIDC_REQUIRE_TENANT_CLAIM=${OIDC_REQUIRE_TENANT_CLAIM:-true}
+      - OIDC_REQUIRE_DATABASE_MEMBERSHIP=${OIDC_REQUIRE_DATABASE_MEMBERSHIP:-true}
+      - KEYCLOAK_ADMIN_BASE_URL=${KEYCLOAK_ADMIN_BASE_URL:-}
+      - KEYCLOAK_ADMIN_REALM=${KEYCLOAK_ADMIN_REALM:-}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID:-agentic-rag-admin}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
+      - KEYCLOAK_ADMIN_TIMEOUT_SECONDS=${KEYCLOAK_ADMIN_TIMEOUT_SECONDS:-10}
+      - KEYCLOAK_INVITATION_LIFESPAN_SECONDS=${KEYCLOAK_INVITATION_LIFESPAN_SECONDS:-86400}
+      - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-http://localhost:5173}
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
       - DATABASE_ECHO=${DATABASE_ECHO:-false}
       - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
@@ -91,6 +130,10 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
+      supertokens:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
       interval: 30s
@@ -105,6 +148,8 @@ services:
       - eventnet
       - storagenet
       - searchnet
+      - authnet
+      - emailnet
 
   frontend:
     build:
@@ -119,6 +164,43 @@ services:
     restart: unless-stopped
     networks:
       - appnet
+
+  supertokens:
+    image: supertokens/supertokens-postgresql:11.4.5
+    container_name: agentic-rag-supertokens
+    environment:
+      - POSTGRESQL_CONNECTION_URI=postgresql://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${SUPERTOKENS_POSTGRES_DB:-agentic_rag_auth}
+      - API_KEYS=${SUPERTOKENS_API_KEY:-change-this-development-supertokens-api-key}
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3567/hello"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - dbnet
+      - authnet
+
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    container_name: agentic-rag-mailpit
+    environment:
+      - MP_SMTP_AUTH_ACCEPT_ANY=true
+      - MP_SMTP_AUTH_ALLOW_INSECURE=true
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - emailnet
 
   ingestion-worker:
     build:
@@ -267,6 +349,43 @@ services:
       - dbnet
       - cachenet
       - eventnet
+
+  email-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: agentic-rag-email-worker
+    command: ["python", "-m", "agentic_rag.workers.email"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentic_rag}:${POSTGRES_PASSWORD:-agentic_rag}@postgres:5432/${POSTGRES_DB:-agentic_rag}
+      - INVITATION_CONTEXT_SECRET=${INVITATION_CONTEXT_SECRET:-change-this-development-invitation-context-secret}
+      - EMAIL_DELIVERY_PROVIDER=${EMAIL_DELIVERY_PROVIDER:-smtp}
+      - SMTP_HOST=${SMTP_HOST:-mailpit}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-false}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@agentic-rag.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Agentic RAG}
+      - SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@agentic-rag.local}
+      - EMAIL_WORKER_POLL_SECONDS=${EMAIL_WORKER_POLL_SECONDS:-5}
+      - EMAIL_WORKER_MAX_ATTEMPTS=${EMAIL_WORKER_MAX_ATTEMPTS:-5}
+      - EMAIL_WORKER_LEASE_SECONDS=${EMAIL_WORKER_LEASE_SECONDS:-60}
+    depends_on:
+      db-seed:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - dbnet
+      - emailnet
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -432,6 +551,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-agentic_rag}
       - POSTGRES_USER=${POSTGRES_USER:-agentic_rag}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agentic_rag}
+      - SUPERTOKENS_POSTGRES_DB=${SUPERTOKENS_POSTGRES_DB:-agentic_rag_auth}
     entrypoint:
       - /bin/sh
       - -c
@@ -442,6 +562,9 @@ services:
         done
         export PGPASSWORD="$${POSTGRES_PASSWORD}"
         psql -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+        if ! psql -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -lqt | cut -d '|' -f 1 | tr -d ' ' | grep -qx "$${SUPERTOKENS_POSTGRES_DB}"; then
+          createdb -h postgres -U "$${POSTGRES_USER}" "$${SUPERTOKENS_POSTGRES_DB}"
+        fi
         echo "[PostgreSQL] Vector extension ready"
     restart: "no"
     networks:
@@ -566,7 +689,9 @@ services:
 
 networks:
   appnet:
+  authnet:
   dbnet:
+  emailnet:
   cachenet:
   eventnet:
   storagenet:

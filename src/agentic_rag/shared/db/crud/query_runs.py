@@ -37,6 +37,7 @@ def create_query_run(
         db_obj = QueryRun(
             id=agent_run_id,
             tenant_id=user_context.tenant_id,
+            department_id=user_context.department_id,
             workspace_id=request.workspace_id or user_context.workspace_id,
             user_id=user_context.id,
             request_id=request_id,
@@ -232,6 +233,7 @@ def list_query_runs(
     skip: int = 0,
     limit: int = 50,
     workspace_id: Optional[str] = None,
+    department_ids: Optional[list[UUID]] = None,
     user_id: Optional[str] = None,
     request_id: Optional[str] = None,
     status: QueryRunStatus | None = None,
@@ -251,6 +253,8 @@ def list_query_runs(
 
     if workspace_id:
         query = query.filter(QueryRun.workspace_id == workspace_id)
+    if department_ids:
+        query = query.filter(QueryRun.department_id.in_(department_ids))
     if user_id:
         query = query.filter(QueryRun.user_id == user_id)
     if request_id:
@@ -266,14 +270,10 @@ def list_query_runs(
 
     total = query.order_by(None).count()
     query_runs = (
-        query.order_by(desc(QueryRun.created_at))
-        .offset(skip)
-        .limit(limit)
-        .all()
+        query.order_by(desc(QueryRun.created_at)).offset(skip).limit(limit).all()
     )
     logger.info(
-        f"[DB] Listed {len(query_runs)} query runs of total={total} "
-        f"tenant={tenant_id}"
+        f"[DB] Listed {len(query_runs)} query runs of total={total} tenant={tenant_id}"
     )
     return query_runs, total
 

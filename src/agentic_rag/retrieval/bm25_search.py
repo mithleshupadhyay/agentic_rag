@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from agentic_rag.core.authorization import resolve_authorized_department_ids
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.monitoring.metrics import (
     RETRIEVAL_LATENCY_SECONDS,
@@ -46,9 +47,22 @@ def search_bm25_chunks(
         raise HTTPException(status_code=400, detail="Retrieval query is required.")
 
     if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="Retrieval limit must be between 1 and 200.")
+        raise HTTPException(
+            status_code=400, detail="Retrieval limit must be between 1 and 200."
+        )
 
     filters = filters or RetrievalFilters()
+    department_ids = resolve_authorized_department_ids(
+        user_context,
+        filters.department_ids,
+        "rag.query",
+    )
+    if user_context.tenant_uuid is not None and not department_ids:
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.BM25,
+            candidates=[],
+            latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
     if user_context.workspace_id and filters.workspace_id:
         if user_context.workspace_id != filters.workspace_id:
             logger.warning(
@@ -80,9 +94,19 @@ def search_bm25_chunks(
     ]
     if workspace_id:
         filter_clauses.append({"term": {"workspace_id": workspace_id}})
+    if department_ids:
+        filter_clauses.append(
+            {"terms": {"department_id": [str(item) for item in department_ids]}}
+        )
     if filters.document_ids:
         filter_clauses.append(
-            {"terms": {"document_id": [str(document_id) for document_id in filters.document_ids]}}
+            {
+                "terms": {
+                    "document_id": [
+                        str(document_id) for document_id in filters.document_ids
+                    ]
+                }
+            }
         )
     if filters.source_types:
         filter_clauses.append({"terms": {"source_type": filters.source_types}})
@@ -114,12 +138,8 @@ def search_bm25_chunks(
                     detail="Metadata filter values must be strings, numbers, or booleans.",
                 )
 
-            document_metadata_field = (
-                f"document_metadata.{clean_metadata_key}.keyword"
-            )
-            chunk_metadata_field = (
-                f"chunk_metadata.{clean_metadata_key}.keyword"
-            )
+            document_metadata_field = f"document_metadata.{clean_metadata_key}.keyword"
+            chunk_metadata_field = f"chunk_metadata.{clean_metadata_key}.keyword"
             filter_clauses.append(
                 {
                     "bool": {
@@ -237,7 +257,11 @@ def search_bm25_chunks(
             [
                 {"term": {"owner_user_id": user_context.id}},
                 {"term": {"allowed_user_ids": user_context.id}},
-                {"terms": {"visibility": [Visibility.PUBLIC.value, Visibility.TENANT.value]}},
+                {
+                    "terms": {
+                        "visibility": [Visibility.PUBLIC.value, Visibility.TENANT.value]
+                    }
+                },
             ]
         )
         if user_groups:
@@ -273,6 +297,7 @@ def search_bm25_chunks(
         "size": limit,
         "_source": [
             "tenant_id",
+            "department_id",
             "workspace_id",
             "document_id",
             "chunk_id",
@@ -336,7 +361,10 @@ def search_bm25_chunks(
 
             quote = None
             for highlighted_fragment in highlighted_content:
-                if isinstance(highlighted_fragment, str) and highlighted_fragment.strip():
+                if (
+                    isinstance(highlighted_fragment, str)
+                    and highlighted_fragment.strip()
+                ):
                     quote = highlighted_fragment
                     break
             if quote is None:
@@ -366,6 +394,7 @@ def search_bm25_chunks(
 
             source_document_id = source.get("document_id")
             source_chunk_id = source.get("chunk_id")
+            source_department_id = source.get("department_id")
             source_section_path = source.get("section_path")
             try:
                 document_id = UUID(str(source_document_id))
@@ -379,6 +408,24 @@ def search_bm25_chunks(
                 )
                 continue
 
+            if user_context.tenant_uuid is not None:
+                try:
+                    department_id = UUID(str(source_department_id))
+                except (TypeError, ValueError):
+                    skipped_invalid_hit_count += 1
+                    logger.warning(
+                        f"[Retrieval] Skipping BM25 hit without department "
+                        f"tenant={user_context.tenant_id} chunk_id={chunk_id}"
+                    )
+                    continue
+                if department_id not in department_ids:
+                    skipped_invalid_hit_count += 1
+                    logger.warning(
+                        f"[Retrieval] Skipping unauthorized BM25 hit "
+                        f"tenant={user_context.tenant_id} department={department_id}"
+                    )
+                    continue
+
             try:
                 candidate = CandidateChunk(
                     chunk_id=chunk_id,
@@ -387,6 +434,7 @@ def search_bm25_chunks(
                     score=score,
                     source=RetrievalTool.BM25_SEARCH,
                     metadata={
+                        "department_id": source_department_id,
                         "workspace_id": source.get("workspace_id"),
                         "chunk_index": source.get("chunk_index"),
                         "token_count": source.get("token_count"),

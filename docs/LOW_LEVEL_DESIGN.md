@@ -214,6 +214,30 @@ class AuthContext(BaseModel):
     request_id: str | None = None
 ```
 
+### Identity And Invitation Lifecycle
+
+Keycloak owns password credentials, required actions, email verification, and
+Google/GitHub identity brokering. Its password hashes live in a dedicated
+Keycloak PostgreSQL database or schema. The Agentic RAG `users`, `roles`, and
+`user_roles` tables remain the application authorization source of truth.
+
+```text
+GET  /auth/config
+GET  /auth/session
+GET  /admin/users
+POST /admin/users/invitations
+```
+
+The invitation endpoint requires the tenant `admin` role. It creates a
+Keycloak identity, assigns fixed realm and API client roles, persists the same
+subject under the current tenant, and sends `VERIFY_EMAIL` plus
+`UPDATE_PASSWORD` required actions. Failures run compensating deletion so an
+incomplete user is not retained in only one system.
+
+For every OIDC request, the API verifies the signed token and then requires a
+matching `(tenant_id, external_subject)` database membership. Membership
+status, tenant role, workspace, and ACL version override broader token claims.
+
 ### Pagination
 
 ```python

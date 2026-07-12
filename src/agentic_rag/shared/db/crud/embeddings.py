@@ -11,7 +11,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.shared.db.models import ChunkAcl, ChunkEmbedding, Document, DocumentChunk
+from agentic_rag.shared.db.models import (
+    ChunkAcl,
+    ChunkEmbedding,
+    Document,
+    DocumentChunk,
+)
 from agentic_rag.shared.schemas.auth import Visibility
 from agentic_rag.shared.schemas.chunks import ChunkEmbeddingCreate
 
@@ -117,6 +122,7 @@ def create_chunk_embedding(
             f"chunk={obj_in.chunk_id} model={obj_in.embedding_model}"
         )
         existing_embedding.workspace_id = chunk.workspace_id
+        existing_embedding.department_id = chunk.department_id
         existing_embedding.document_id = chunk.document_id
         existing_embedding.embedding = obj_in.embedding
         existing_embedding.embedding_dimension = obj_in.embedding_dimension
@@ -144,6 +150,7 @@ def create_chunk_embedding(
 
     db_obj = ChunkEmbedding(
         tenant_id=tenant_id,
+        department_id=chunk.department_id,
         workspace_id=chunk.workspace_id,
         document_id=chunk.document_id,
         chunk_id=chunk.id,
@@ -217,7 +224,9 @@ def bulk_create_chunk_embeddings(
     written_count = 0
     try:
         for embedding_payload in embeddings:
-            if embedding_payload.embedding_dimension != len(embedding_payload.embedding):
+            if embedding_payload.embedding_dimension != len(
+                embedding_payload.embedding
+            ):
                 logger.warning(
                     f"[DB] Embedding dimension mismatch chunk={embedding_payload.chunk_id} "
                     f"declared={embedding_payload.embedding_dimension} "
@@ -253,6 +262,7 @@ def bulk_create_chunk_embeddings(
                     continue
 
                 existing_embedding.workspace_id = chunk.workspace_id
+                existing_embedding.department_id = chunk.department_id
                 existing_embedding.document_id = chunk.document_id
                 existing_embedding.embedding = embedding_payload.embedding
                 existing_embedding.embedding_dimension = (
@@ -265,6 +275,7 @@ def bulk_create_chunk_embeddings(
 
             db_obj = ChunkEmbedding(
                 tenant_id=tenant_id,
+                department_id=chunk.department_id,
                 workspace_id=chunk.workspace_id,
                 document_id=chunk.document_id,
                 chunk_id=chunk.id,
@@ -311,6 +322,7 @@ def get_chunks_missing_embedding(
     embedding_model: str,
     vector_version: int = 1,
     limit: int = 100,
+    department_id: Optional[UUID] = None,
     document_id: Optional[UUID] = None,
     chunk_ids: Optional[list[UUID]] = None,
 ) -> list[DocumentChunk]:
@@ -344,6 +356,8 @@ def get_chunks_missing_embedding(
     )
     if document_id:
         query = query.filter(DocumentChunk.document_id == document_id)
+    if department_id:
+        query = query.filter(DocumentChunk.department_id == department_id)
     if chunk_ids:
         query = query.filter(DocumentChunk.id.in_(chunk_ids))
     query = query.limit(limit)
@@ -354,9 +368,7 @@ def get_chunks_missing_embedding(
         query = query.with_for_update(skip_locked=True, of=DocumentChunk)
 
     chunks = query.all()
-    logger.info(
-        f"[DB] Found {len(chunks)} chunks missing embedding tenant={tenant_id}"
-    )
+    logger.info(f"[DB] Found {len(chunks)} chunks missing embedding tenant={tenant_id}")
     return chunks
 
 
@@ -370,6 +382,7 @@ def search_similar_chunks_by_embedding(
     limit: int = 20,
     min_similarity: Optional[float] = None,
     workspace_id: Optional[str] = None,
+    department_ids: Optional[list[UUID]] = None,
     document_ids: Optional[list[UUID]] = None,
     source_types: Optional[list[str]] = None,
     metadata_filters: Optional[dict[str, object]] = None,
@@ -384,6 +397,7 @@ def search_similar_chunks_by_embedding(
     logger.info(
         f"[DB] Searching similar chunks tenant={tenant_id} model={embedding_model} "
         f"vector_version={vector_version} limit={limit} workspace_id={workspace_id} "
+        f"department_count={len(department_ids or [])} "
         f"document_count={len(document_ids or [])} source_type_count={len(source_types)} "
         f"metadata_filter_count={len(metadata_filters)} tag_count={len(tags)} "
         f"date_filter_count={len(date_range)}"
@@ -437,6 +451,8 @@ def search_similar_chunks_by_embedding(
         )
         if workspace_id:
             query = query.filter(DocumentChunk.workspace_id == workspace_id)
+        if department_ids:
+            query = query.filter(DocumentChunk.department_id.in_(department_ids))
         if document_ids:
             query = query.filter(DocumentChunk.document_id.in_(document_ids))
         if source_types:
@@ -458,14 +474,20 @@ def search_similar_chunks_by_embedding(
                     )
                 )
         for tag in tags:
-            tag_value = tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            tag_value = (
+                tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
             query = query.filter(
                 or_(
-                    Document.metadata_["tags"].as_string().like(
+                    Document.metadata_["tags"]
+                    .as_string()
+                    .like(
                         f'%"{tag_value}"%',
                         escape="\\",
                     ),
-                    DocumentChunk.metadata_["tags"].as_string().like(
+                    DocumentChunk.metadata_["tags"]
+                    .as_string()
+                    .like(
                         f'%"{tag_value}"%',
                         escape="\\",
                     ),
@@ -612,6 +634,8 @@ def search_similar_chunks_by_embedding(
     )
     if workspace_id:
         query = query.filter(DocumentChunk.workspace_id == workspace_id)
+    if department_ids:
+        query = query.filter(DocumentChunk.department_id.in_(department_ids))
     if document_ids:
         query = query.filter(DocumentChunk.document_id.in_(document_ids))
     if source_types:
@@ -679,15 +703,15 @@ def search_similar_chunks_by_embedding(
         user_roles = user_context.roles or []
         query = query.filter(
             DocumentChunk.acl_version <= user_context.acl_version,
-            or_(ChunkAcl.id.is_(None), ChunkAcl.acl_version <= user_context.acl_version),
+            or_(
+                ChunkAcl.id.is_(None), ChunkAcl.acl_version <= user_context.acl_version
+            ),
         )
 
         denied_clauses = [ChunkAcl.denied_user_ids.contains([user_context.id])]
         for group_id in user_groups:
             denied_clauses.append(ChunkAcl.denied_group_ids.contains([group_id]))
-        query = query.filter(
-            or_(ChunkAcl.id.is_(None), not_(or_(*denied_clauses)))
-        )
+        query = query.filter(or_(ChunkAcl.id.is_(None), not_(or_(*denied_clauses))))
 
         if "admin" not in user_roles:
             allowed_clauses = [

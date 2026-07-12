@@ -4,8 +4,17 @@ from uuid import UUID
 
 from pydantic import Field
 
-from agentic_rag.shared.schemas.common import APIModel, JsonObject, ORMModel, PageRequest, PageResponse
-from agentic_rag.shared.schemas.documents import DocumentCreateRequest, DocumentSourceType
+from agentic_rag.shared.schemas.common import (
+    APIModel,
+    JsonObject,
+    ORMModel,
+    PageRequest,
+    PageResponse,
+)
+from agentic_rag.shared.schemas.documents import (
+    DocumentCreateRequest,
+    DocumentSourceType,
+)
 
 
 class IngestionJobStatus(StrEnum):
@@ -27,6 +36,7 @@ class IngestionStage(StrEnum):
 
 
 class IngestionJobCreate(APIModel):
+    department_id: UUID | None = None
     workspace_id: str | None = None
     source_type: DocumentSourceType
     source_uri: str | None = None
@@ -42,6 +52,7 @@ class BatchDocumentCreateRequest(APIModel):
 class IngestionJobRead(ORMModel):
     id: UUID
     tenant_id: str
+    department_id: UUID | None = None
     workspace_id: str | None = None
     document_id: UUID | None = None
     source_type: DocumentSourceType
@@ -75,6 +86,7 @@ class IngestionJobResponse(APIModel):
 
 class IngestionJobSearchRequest(APIModel):
     page: PageRequest = Field(default_factory=PageRequest)
+    department_ids: list[UUID] = Field(default_factory=list, max_length=100)
     workspace_id: str | None = None
     status: IngestionJobStatus | None = None
     current_stage: IngestionStage | None = None

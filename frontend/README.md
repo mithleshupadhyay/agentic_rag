@@ -69,3 +69,22 @@ VITE_AUTH_TOKEN=local-dev-token
 VITE_WORKSPACE_ID=local-workspace
 VITE_QUERY_STRATEGY=hybrid
 ```
+
+## Authentication
+
+The frontend loads public authentication settings from `/api/auth/config`.
+With `AUTH_PROVIDER=keycloak`, it uses Authorization Code with PKCE and obtains
+the API bearer token from the OIDC session. Google, GitHub, LinkedIn, and other
+providers are configured as Keycloak identity providers, not in React.
+
+The login screen exposes configured social providers in the top-right and sends
+email or username sign-in to Keycloak's hosted password form. Tenant admins use
+the Users view to invite members and assign `viewer`, `user`, or `admin` roles.
+Passwords and provider secrets never enter the frontend or Agentic RAG API.
+
+The backend `/api/auth/session` response supplies the authoritative tenant,
+workspace, roles, groups, scopes, and ACL version. The frontend uses these
+values to hide unavailable actions, while the API enforces every permission.
+
+See [Authentication And Tenant Access](../docs/AUTHENTICATION.md) for Keycloak,
+claim mapper, social provider, and deployment configuration.

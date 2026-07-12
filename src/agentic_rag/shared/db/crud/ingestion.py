@@ -57,12 +57,9 @@ def list_ingestion_jobs_for_document(
         f"[DB] Listing ingestion jobs tenant={tenant_id} document={document_id} "
         f"skip={skip} limit={limit} status={status} stage={current_stage}"
     )
-    query = (
-        db.query(IngestionJob)
-        .filter(
-            IngestionJob.tenant_id == tenant_id,
-            IngestionJob.document_id == document_id,
-        )
+    query = db.query(IngestionJob).filter(
+        IngestionJob.tenant_id == tenant_id,
+        IngestionJob.document_id == document_id,
     )
     if status:
         query = query.filter(IngestionJob.status == status)
@@ -71,10 +68,7 @@ def list_ingestion_jobs_for_document(
 
     total = query.order_by(None).count()
     jobs = (
-        query.order_by(IngestionJob.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+        query.order_by(IngestionJob.created_at.desc()).offset(skip).limit(limit).all()
     )
     logger.info(
         f"[DB] Listed {len(jobs)} ingestion jobs of total={total} "
@@ -142,9 +136,7 @@ def claim_next_ingestion_job(
         db.commit()
         db.refresh(job)
         _ = job.document
-        logger.info(
-            f"[DB] Ingestion job {job.id} lease_expires_at={lease_expires_at}"
-        )
+        logger.info(f"[DB] Ingestion job {job.id} lease_expires_at={lease_expires_at}")
         return job
 
     except IntegrityError as e:
@@ -506,6 +498,7 @@ def replace_document_chunks(
         for chunk_payload in chunks:
             db_chunk = DocumentChunk(
                 tenant_id=document.tenant_id,
+                department_id=document.department_id,
                 workspace_id=document.workspace_id,
                 document_id=document.id,
                 chunk_index=chunk_payload["chunk_index"],
@@ -549,7 +542,9 @@ def replace_document_chunks(
 
     except IntegrityError as e:
         db.rollback()
-        logger.exception(f"[DB] Failed to replace chunks for document {document.id}: {e}")
+        logger.exception(
+            f"[DB] Failed to replace chunks for document {document.id}: {e}"
+        )
         raise HTTPException(
             status_code=400,
             detail="Database error during document chunk storage.",

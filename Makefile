@@ -2,10 +2,10 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 DOCKER_COMPOSE_FILE ?= docker-compose.yml
-DOCKER_PROJECT ?= agentic-rag
+DOCKER_PROJECT ?= agentic_rag
 ENV_FILE ?= .env
 
-.PHONY: help test lint typecheck poetry-check diff-check check ensure-env docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-vector-retrieval docker-smoke-bm25-retrieval docker-smoke-upload-query docker-smoke-kafka-producer docker-smoke-kafka-consumer docker-smoke-monitoring
+.PHONY: help test lint typecheck poetry-check diff-check check ensure-env bootstrap-admin docker-build docker-up docker-up-build docker-up-recreate docker-down docker-stop docker-logs docker-ps docker-restart docker-exec docker-smoke-embedding-worker docker-smoke-vector-retrieval docker-smoke-bm25-retrieval docker-smoke-upload-query docker-smoke-kafka-producer docker-smoke-kafka-consumer docker-smoke-monitoring
 
 help:
 	@printf '%s\n' "Available targets:"
@@ -15,6 +15,7 @@ help:
 	@printf '%s\n' "  make poetry-check  Validate Poetry project metadata"
 	@printf '%s\n' "  make diff-check    Check git diff for whitespace errors"
 	@printf '%s\n' "  make check         Run all validation checks"
+	@printf '%s\n' "  make bootstrap-admin Bootstrap the first administrator for a tenant"
 	@printf '%s\n' "  make docker-build  Build local Docker images"
 	@printf '%s\n' "  make docker-up     Start local Docker stack"
 	@printf '%s\n' "  make docker-up-build Build and start local Docker stack"
@@ -52,6 +53,24 @@ check: test lint typecheck poetry-check diff-check
 
 ensure-env:
 	@test -f $(ENV_FILE) || (printf '%s\n' "Missing $(ENV_FILE). Run: cp .env.template $(ENV_FILE)" && exit 1)
+
+bootstrap-admin: ensure-env
+ifndef TENANT_ID
+	$(error Please provide TENANT_ID)
+endif
+ifndef TENANT_NAME
+	$(error Please provide TENANT_NAME)
+endif
+ifndef ADMIN_EMAIL
+	$(error Please provide ADMIN_EMAIL)
+endif
+	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) exec -T api \
+		python scripts/bootstrap_tenant_admin.py \
+		--tenant-id "$(TENANT_ID)" \
+		--tenant-name "$(TENANT_NAME)" \
+		--admin-email "$(ADMIN_EMAIL)" \
+		$(if $(ADMIN_NAME),--admin-name "$(ADMIN_NAME)") \
+		$(if $(WORKSPACE_ID),--workspace-id "$(WORKSPACE_ID)")
 
 docker-build: ensure-env
 	docker compose --env-file $(ENV_FILE) -f $(DOCKER_COMPOSE_FILE) -p $(DOCKER_PROJECT) build

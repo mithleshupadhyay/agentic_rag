@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from agentic_rag.llm.gateway import generate_embeddings
+from agentic_rag.llm.manager import llm_manager
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.db.crud.embeddings import (
     bulk_create_chunk_embeddings,
@@ -40,8 +41,12 @@ def process_embedding_batch(
     tenant_id: str,
     embedding_client: Optional[EmbeddingClient] = None,
     limit: Optional[int] = None,
+    department_id: Optional[UUID] = None,
     document_id: Optional[UUID] = None,
     chunk_ids: Optional[list[UUID]] = None,
+    provider_id: Optional[UUID] = None,
+    expected_embedding_model: Optional[str] = None,
+    expected_embedding_dimension: Optional[int] = None,
 ) -> int:
     logger.info(
         f"[EmbeddingWorker] Processing embedding batch tenant={tenant_id} "
@@ -49,13 +54,57 @@ def process_embedding_batch(
     )
     embedding_client = embedding_client or generate_embeddings
     batch_limit = limit or settings.embedding_batch_size
+    embedding_auth = AuthContext(
+        user_id=EMBEDDING_WORKER_ID,
+        tenant_id=tenant_id,
+        department_id=department_id,
+        scopes=["embeddings:write"],
+        token_type=TokenType.SERVICE,
+    )
+    try:
+        embedding_route = llm_manager.resolve_embedding_provider(
+            EmbeddingRequest(
+                auth=embedding_auth,
+                texts=["Resolve the tenant embedding route."],
+                provider_id=provider_id,
+                metadata={"source": EMBEDDING_WORKER_ID},
+            ),
+            db=db,
+        )
+    except Exception as e:
+        logger.exception(
+            f"[EmbeddingWorker] Provider resolution failed tenant={tenant_id}: {e}"
+        )
+        return 0
+    embedding_dimension = (
+        embedding_route.embedding_dimension or settings.embedding_dimension
+    )
+
+    if expected_embedding_model and expected_embedding_model != embedding_route.model:
+        logger.warning(
+            f"[EmbeddingWorker] Event route is stale tenant={tenant_id} "
+            f"event_model={expected_embedding_model} "
+            f"active_model={embedding_route.model}"
+        )
+        return 0
+    if (
+        expected_embedding_dimension
+        and expected_embedding_dimension != embedding_dimension
+    ):
+        logger.warning(
+            f"[EmbeddingWorker] Event dimension is stale tenant={tenant_id} "
+            f"event_dimension={expected_embedding_dimension} "
+            f"active_dimension={embedding_dimension}"
+        )
+        return 0
 
     chunks = get_chunks_missing_embedding(
         db=db,
         tenant_id=tenant_id,
-        embedding_model=settings.embedding_model_name,
+        embedding_model=embedding_route.model,
         vector_version=settings.embedding_vector_version,
         limit=batch_limit,
+        department_id=department_id,
         document_id=document_id,
         chunk_ids=chunk_ids,
     )
@@ -66,16 +115,9 @@ def process_embedding_batch(
     try:
         response = embedding_client(
             EmbeddingRequest(
-                auth=AuthContext(
-                    user_id="embedding-worker",
-                    tenant_id=tenant_id,
-                    scopes=["embeddings:write"],
-                    token_type=TokenType.SERVICE,
-                ),
+                auth=embedding_auth,
                 texts=[chunk.content for chunk in chunks],
-                model=settings.embedding_model_name,
-                provider=settings.embedding_provider,
-                timeout_seconds=settings.embedding_timeout_seconds,
+                provider_id=embedding_route.provider_id,
                 metadata={
                     "source": EMBEDDING_WORKER_ID,
                     "chunk_count": len(chunks),
@@ -87,10 +129,10 @@ def process_embedding_batch(
                 "Embedding response count did not match selected chunk count "
                 f"({len(response.embeddings)}!={len(chunks)})."
             )
-        if response.dimension != settings.embedding_dimension:
+        if response.dimension != embedding_dimension:
             raise ValueError(
                 "Embedding response dimension does not match configured dimension "
-                f"({response.dimension}!={settings.embedding_dimension})."
+                f"({response.dimension}!={embedding_dimension})."
             )
 
         embedding_payloads = []
@@ -107,6 +149,11 @@ def process_embedding_batch(
                     metadata={
                         "source": "embedding-worker",
                         "provider": response.provider,
+                        "provider_id": (
+                            str(embedding_route.provider_id)
+                            if embedding_route.provider_id
+                            else None
+                        ),
                         "latency_ms": response.latency_ms,
                         "chunk_index": chunk.chunk_index,
                     },
@@ -208,12 +255,6 @@ def handle_embedding_event(
         )
         return False
 
-    if payload.embedding_model != settings.embedding_model_name:
-        logger.warning(
-            f"[EmbeddingWorker] Skipping embedding event for unexpected model "
-            f"event_id={envelope.event_id} model={payload.embedding_model}"
-        )
-        return False
     if payload.vector_version != settings.embedding_vector_version:
         logger.warning(
             f"[EmbeddingWorker] Skipping embedding event for unexpected vector version "
@@ -226,10 +267,14 @@ def handle_embedding_event(
         written_count = process_embedding_batch(
             db=db,
             tenant_id=envelope.tenant_id,
+            department_id=envelope.department_id,
             embedding_client=embedding_client,
             limit=len(payload.chunk_ids),
             document_id=payload.document_id,
             chunk_ids=payload.chunk_ids,
+            provider_id=payload.provider_id,
+            expected_embedding_model=payload.embedding_model,
+            expected_embedding_dimension=payload.embedding_dimension,
         )
         logger.info(
             f"[EmbeddingWorker] Handled embedding event event_id={envelope.event_id} "

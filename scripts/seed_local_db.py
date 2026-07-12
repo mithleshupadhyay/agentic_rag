@@ -3,7 +3,7 @@ import logging
 from sqlalchemy.exc import IntegrityError
 
 from agentic_rag.shared.config import settings
-from agentic_rag.shared.db.models import Tenant, User
+from agentic_rag.shared.db.models import Role, Tenant, User, UserRole
 from agentic_rag.shared.db.session import get_sync_session_factory
 
 
@@ -53,6 +53,49 @@ def seed_local_development_data() -> None:
                 )
                 session.add(user)
                 logger.info("[DB] Local user seeded: %s", settings.local_user_id)
+
+            session.flush()
+            for role_name in settings.local_roles:
+                role = (
+                    session.query(Role)
+                    .filter(
+                        Role.tenant_id == settings.local_tenant_id,
+                        Role.name == role_name,
+                    )
+                    .first()
+                )
+                if role is None:
+                    role = Role(
+                        tenant_id=settings.local_tenant_id,
+                        name=role_name,
+                        description=f"Built-in {role_name} tenant role.",
+                        is_system=True,
+                    )
+                    session.add(role)
+                    session.flush()
+
+                user_role = (
+                    session.query(UserRole)
+                    .filter(
+                        UserRole.tenant_id == settings.local_tenant_id,
+                        UserRole.user_id == user.id,
+                        UserRole.role_id == role.id,
+                    )
+                    .first()
+                )
+                if user_role is None:
+                    session.add(
+                        UserRole(
+                            tenant_id=settings.local_tenant_id,
+                            user_id=user.id,
+                            role_id=role.id,
+                        )
+                    )
+                    logger.info(
+                        "[DB] Local user role seeded: user=%s role=%s",
+                        settings.local_user_id,
+                        role_name,
+                    )
 
             session.commit()
             logger.info("[DB] Local development seed completed")

@@ -134,8 +134,8 @@ def test_search_vector_chunks_generates_embedding_and_returns_candidates(
     assert response.candidates[0].metadata["vector_version"] == 7
     assert response.candidates[0].metadata["distance"] == 0.08
     assert embedding_request.texts == ["password policy"]
-    assert embedding_request.provider == "litellm"
-    assert embedding_request.model == "openai/text-embedding-3-small"
+    assert embedding_request.provider is None
+    assert embedding_request.model is None
     assert embedding_request.auth.tenant_id == "tenant-a"
     assert embedding_request.auth.group_ids == ["security"]
     assert search_kwargs["tenant_id"] == "tenant-a"

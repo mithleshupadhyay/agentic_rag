@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, false
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentic_rag.shared.db.base import (
@@ -21,6 +22,11 @@ class QueryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(64),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
         index=True,
     )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
@@ -125,4 +131,10 @@ class QueryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_query_runs_tenant_user_created", "tenant_id", "user_id", "created_at"),
         Index("ix_query_runs_tenant_workspace_created", "tenant_id", "workspace_id", "created_at"),
         Index("ix_query_runs_tenant_conversation", "tenant_id", "conversation_id"),
+        Index(
+            "ix_query_runs_tenant_department_created",
+            "tenant_id",
+            "department_id",
+            "created_at",
+        ),
     )

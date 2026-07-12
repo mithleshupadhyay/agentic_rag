@@ -46,6 +46,7 @@ def create_agent_run(
     db_obj = AgentRun(
         id=agent_run_id,
         tenant_id=auth.tenant_id,
+        department_id=auth.department_id,
         workspace_id=auth.workspace_id,
         user_id=auth.user_id,
         query_text=query.strip(),

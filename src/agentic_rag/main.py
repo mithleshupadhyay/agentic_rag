@@ -8,14 +8,18 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from prometheus_fastapi_instrumentator import Instrumentator
+from supertokens_python.framework.fastapi import get_middleware
 
-from agentic_rag.api import documents, health, query, retrieval
+from agentic_rag.api import admin, auth, documents, health, query, retrieval, tenancy
+from agentic_rag.core.supertokens import initialize_supertokens
 from agentic_rag.shared.config import settings
 
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+supertokens_enabled = initialize_supertokens()
 
 app = FastAPI(
     title=settings.app_name,
@@ -25,6 +29,9 @@ app = FastAPI(
 
 # Prometheus metrics must be registered before startup.
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+if supertokens_enabled:
+    app.add_middleware(get_middleware())
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,6 +65,9 @@ async def request_id_middleware(request: Request, call_next):
 
 
 app.include_router(health.router)
+app.include_router(auth.router)
+app.include_router(tenancy.router)
+app.include_router(admin.router)
 app.include_router(documents.router)
 app.include_router(retrieval.router)
 app.include_router(query.router)
@@ -83,9 +93,13 @@ def custom_openapi() -> dict[str, Any]:
         }
     }
 
-    for path in openapi_schema["paths"].values():
+    public_paths = {"/auth/config", "/health", "/liveness", "/metrics", "/readiness"}
+    for path_name, path in openapi_schema["paths"].items():
         for operation in path.values():
-            operation["security"] = [{"BearerAuth": []}]
+            if isinstance(operation, dict):
+                operation["security"] = (
+                    [] if path_name in public_paths else [{"BearerAuth": []}]
+                )
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema

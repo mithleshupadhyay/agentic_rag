@@ -738,6 +738,7 @@ def generate_answer_node(graph_state: AgentGraphState) -> dict[str, Any]:
     try:
         llm_response = generate_chat_completion(
             ChatCompletionRequest(
+                auth=agent_state.auth,
                 messages=[
                     LLMMessage(
                         role="system",
@@ -1402,6 +1403,7 @@ def stream_agent_runtime_graph(
                     answer_latency_ms = None
                     for llm_stream_event in stream_chat_completion(
                         ChatCompletionRequest(
+                            auth=agent_state.auth,
                             messages=[
                                 LLMMessage(
                                     role="system",

@@ -25,6 +25,7 @@ class RetrievalTool(StrEnum):
 
 class RetrievalFilters(APIModel):
     workspace_id: str | None = None
+    department_ids: list[UUID] = Field(default_factory=list, max_length=100)
     document_ids: list[UUID] = Field(default_factory=list)
     source_types: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

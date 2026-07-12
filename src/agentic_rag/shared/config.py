@@ -6,24 +6,214 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    auth_provider: str = Field(default="local", validation_alias="AUTH_PROVIDER")
+    auth_provider: Literal[
+        "local",
+        "supertokens",
+        "auth0",
+        "oidc",
+        "keycloak",
+    ] = Field(default="local", validation_alias="AUTH_PROVIDER")
     app_name: str = Field(default="Agentic RAG", validation_alias="APP_NAME")
     app_version: str = Field(default="0.1.0", validation_alias="APP_VERSION")
     allowed_origins_csv: str = Field(default="*", validation_alias="ALLOWED_ORIGINS")
-    oidc_issuer_url: str = Field(default="", validation_alias="OIDC_ISSUER_URL")
-    oidc_audience: str = Field(default="", validation_alias="OIDC_AUDIENCE")
-    oidc_jwks_url: str = Field(default="", validation_alias="OIDC_JWKS_URL")
-    local_auth_token: str = Field(default="local-dev-token", validation_alias="LOCAL_AUTH_TOKEN")
+    supertokens_connection_uri: str = Field(
+        default="http://localhost:3567",
+        validation_alias="SUPERTOKENS_CONNECTION_URI",
+    )
+    supertokens_api_key: str = Field(
+        default="",
+        validation_alias="SUPERTOKENS_API_KEY",
+    )
+    supertokens_app_name: str = Field(
+        default="Agentic RAG",
+        validation_alias="SUPERTOKENS_APP_NAME",
+    )
+    supertokens_api_domain: str = Field(
+        default="http://localhost:8100",
+        validation_alias="SUPERTOKENS_API_DOMAIN",
+    )
+    supertokens_website_domain: str = Field(
+        default="http://localhost:5173",
+        validation_alias="SUPERTOKENS_WEBSITE_DOMAIN",
+    )
+    supertokens_api_base_path: str = Field(
+        default="/auth",
+        validation_alias="SUPERTOKENS_API_BASE_PATH",
+    )
+    supertokens_website_base_path: str = Field(
+        default="/auth",
+        validation_alias="SUPERTOKENS_WEBSITE_BASE_PATH",
+    )
+    supertokens_cookie_domain: str = Field(
+        default="",
+        validation_alias="SUPERTOKENS_COOKIE_DOMAIN",
+    )
+    supertokens_cookie_secure: bool = Field(
+        default=False,
+        validation_alias="SUPERTOKENS_COOKIE_SECURE",
+    )
+    supertokens_cookie_same_site: Literal["lax", "none", "strict"] = Field(
+        default="lax",
+        validation_alias="SUPERTOKENS_COOKIE_SAME_SITE",
+    )
+    google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str = Field(
+        default="",
+        validation_alias="GOOGLE_CLIENT_SECRET",
+    )
+    github_client_id: str = Field(default="", validation_alias="GITHUB_CLIENT_ID")
+    github_client_secret: str = Field(
+        default="",
+        validation_alias="GITHUB_CLIENT_SECRET",
+    )
+    public_tenant_signup_enabled: bool = Field(
+        default=True,
+        validation_alias="PUBLIC_TENANT_SIGNUP_ENABLED",
+    )
+    invite_expiry_hours: int = Field(
+        default=48,
+        ge=1,
+        le=720,
+        validation_alias="INVITE_EXPIRY_HOURS",
+    )
+    invitation_context_secret: str = Field(
+        default="",
+        validation_alias="INVITATION_CONTEXT_SECRET",
+    )
+    invitation_context_ttl_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=3600,
+        validation_alias="INVITATION_CONTEXT_TTL_SECONDS",
+    )
+    temporary_password_provisioning_enabled: bool = Field(
+        default=True,
+        validation_alias="TEMPORARY_PASSWORD_PROVISIONING_ENABLED",
+    )
+    email_delivery_provider: Literal["smtp", "console"] = Field(
+        default="console",
+        validation_alias="EMAIL_DELIVERY_PROVIDER",
+    )
+    smtp_host: str = Field(default="localhost", validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=1025, ge=1, le=65535, validation_alias="SMTP_PORT")
+    smtp_username: str = Field(default="", validation_alias="SMTP_USERNAME")
+    smtp_password: str = Field(default="", validation_alias="SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(default=False, validation_alias="SMTP_USE_TLS")
+    email_from_address: str = Field(
+        default="noreply@agentic-rag.local",
+        validation_alias="EMAIL_FROM_ADDRESS",
+    )
+    email_from_name: str = Field(
+        default="Agentic RAG",
+        validation_alias="EMAIL_FROM_NAME",
+    )
+    support_email: str = Field(
+        default="support@agentic-rag.local",
+        validation_alias="SUPPORT_EMAIL",
+    )
+    email_worker_poll_seconds: float = Field(
+        default=5.0,
+        validation_alias="EMAIL_WORKER_POLL_SECONDS",
+        gt=0,
+    )
+    email_worker_max_attempts: int = Field(
+        default=5,
+        validation_alias="EMAIL_WORKER_MAX_ATTEMPTS",
+        ge=1,
+        le=20,
+    )
+    email_worker_lease_seconds: int = Field(
+        default=60,
+        validation_alias="EMAIL_WORKER_LEASE_SECONDS",
+        ge=15,
+        le=900,
+    )
+    auth0_domain: str = Field(default="", validation_alias="AUTH0_DOMAIN")
+    auth0_api_audience: str = Field(
+        default="",
+        validation_alias="AUTH0_API_AUDIENCE",
+    )
+    auth0_frontend_client_id: str = Field(
+        default="",
+        validation_alias="AUTH0_FRONTEND_CLIENT_ID",
+    )
+    auth0_frontend_scope: str = Field(
+        default="openid profile email",
+        validation_alias="AUTH0_FRONTEND_SCOPE",
+    )
+    auth0_identity_connections_csv: str = Field(
+        default="google-oauth2,github",
+        validation_alias="AUTH0_IDENTITY_CONNECTIONS",
+    )
+    auth0_organization_connection_ids_csv: str = Field(
+        default="",
+        validation_alias="AUTH0_ORGANIZATION_CONNECTION_IDS",
+    )
+    auth0_jwks_cache_seconds: int = Field(
+        default=600,
+        ge=60,
+        le=86400,
+        validation_alias="AUTH0_JWKS_CACHE_SECONDS",
+    )
+    auth0_jwks_timeout_seconds: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        validation_alias="AUTH0_JWKS_TIMEOUT_SECONDS",
+    )
+    auth0_management_client_id: str = Field(
+        default="",
+        validation_alias="AUTH0_MANAGEMENT_CLIENT_ID",
+    )
+    auth0_management_client_secret: str = Field(
+        default="",
+        validation_alias="AUTH0_MANAGEMENT_CLIENT_SECRET",
+    )
+    auth0_database_connection_id: str = Field(
+        default="",
+        validation_alias="AUTH0_DATABASE_CONNECTION_ID",
+    )
+    auth0_management_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        validation_alias="AUTH0_MANAGEMENT_TIMEOUT_SECONDS",
+    )
+    auth0_inviter_name: str = Field(
+        default="Agentic RAG",
+        min_length=1,
+        max_length=300,
+        validation_alias="AUTH0_INVITER_NAME",
+    )
+    auth0_invitation_ttl_seconds: int = Field(
+        default=604800,
+        ge=300,
+        le=2592000,
+        validation_alias="AUTH0_INVITATION_TTL_SECONDS",
+    )
+    frontend_public_url: str = Field(
+        default="http://localhost:5173",
+        validation_alias="FRONTEND_PUBLIC_URL",
+    )
+    local_auth_token: str = Field(
+        default="local-dev-token", validation_alias="LOCAL_AUTH_TOKEN"
+    )
     local_user_id: str = Field(default="local-user", validation_alias="LOCAL_USER_ID")
-    local_tenant_id: str = Field(default="local-tenant", validation_alias="LOCAL_TENANT_ID")
-    local_workspace_id: str | None = Field(default=None, validation_alias="LOCAL_WORKSPACE_ID")
+    local_tenant_id: str = Field(
+        default="local-tenant", validation_alias="LOCAL_TENANT_ID"
+    )
+    local_workspace_id: str | None = Field(
+        default=None, validation_alias="LOCAL_WORKSPACE_ID"
+    )
     local_roles_csv: str = Field(default="admin,user", validation_alias="LOCAL_ROLES")
     local_groups_csv: str = Field(default="", validation_alias="LOCAL_GROUPS")
     local_scopes_csv: str = Field(
         default="documents:read,documents:write,documents:delete,query:run,ingestion:write",
         validation_alias="LOCAL_SCOPES",
     )
-    local_acl_version: int = Field(default=1, ge=1, validation_alias="LOCAL_ACL_VERSION")
+    local_acl_version: int = Field(
+        default=1, ge=1, validation_alias="LOCAL_ACL_VERSION"
+    )
     database_url: str = Field(
         default="postgresql+asyncpg://agentic_rag:agentic_rag@localhost:5432/agentic_rag",
         validation_alias="DATABASE_URL",
@@ -96,13 +286,19 @@ class Settings(BaseSettings):
         default="agentic-rag-indexing",
         validation_alias="KAFKA_INDEXING_CONSUMER_GROUP",
     )
-    s3_endpoint_url: str = Field(default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL")
-    s3_access_key_id: str = Field(default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID")
+    s3_endpoint_url: str = Field(
+        default="http://localhost:9000", validation_alias="S3_ENDPOINT_URL"
+    )
+    s3_access_key_id: str = Field(
+        default="agentic_rag", validation_alias="S3_ACCESS_KEY_ID"
+    )
     s3_secret_access_key: str = Field(
         default="agentic_rag_password",
         validation_alias="S3_SECRET_ACCESS_KEY",
     )
-    s3_bucket_name: str = Field(default="agentic-rag", validation_alias="S3_BUCKET_NAME")
+    s3_bucket_name: str = Field(
+        default="agentic-rag", validation_alias="S3_BUCKET_NAME"
+    )
     s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
     document_upload_max_bytes: int = Field(
         default=25 * 1024 * 1024,
@@ -205,7 +401,9 @@ class Settings(BaseSettings):
         ge=0.0,
         validation_alias="BM25_MIN_SCORE",
     )
-    embedding_provider: str = Field(default="litellm", validation_alias="EMBEDDING_PROVIDER")
+    embedding_provider: str = Field(
+        default="litellm", validation_alias="EMBEDDING_PROVIDER"
+    )
     embedding_model_name: str = Field(
         default="gemini/gemini-embedding-001",
         validation_alias="EMBEDDING_MODEL_NAME",
@@ -252,6 +450,18 @@ class Settings(BaseSettings):
         validation_alias="LLM_SYNTHESIS_ENABLED",
     )
     llm_provider: str = Field(default="litellm", validation_alias="LLM_PROVIDER")
+    llm_provider_database_enabled: bool = Field(
+        default=True,
+        validation_alias="LLM_PROVIDER_DATABASE_ENABLED",
+    )
+    llm_provider_env_fallback_enabled: bool = Field(
+        default=True,
+        validation_alias="LLM_PROVIDER_ENV_FALLBACK_ENABLED",
+    )
+    llm_provider_encryption_key: str = Field(
+        default="",
+        validation_alias="LLM_PROVIDER_ENCRYPTION_KEY",
+    )
     default_llm_model: str = Field(
         default="gemini/gemini-2.5-flash",
         validation_alias="DEFAULT_LLM_MODEL",
@@ -357,6 +567,33 @@ class Settings(BaseSettings):
     @property
     def local_scopes(self) -> list[str]:
         return self._split_csv(self.local_scopes_csv)
+
+    @property
+    def auth0_identity_connections(self) -> list[str]:
+        return self._split_csv(self.auth0_identity_connections_csv)
+
+    @property
+    def auth0_organization_connection_ids(self) -> list[str]:
+        connection_ids = self._split_csv(self.auth0_organization_connection_ids_csv)
+        if self.auth0_database_connection_id:
+            connection_ids.append(self.auth0_database_connection_id.strip())
+        return list(dict.fromkeys(connection_ids))
+
+    @property
+    def auth0_issuer_url(self) -> str:
+        domain = self.auth0_domain.strip().rstrip("/")
+        if domain.startswith(("http://", "https://")):
+            return f"{domain}/"
+        if not domain:
+            return ""
+        return f"https://{domain}/"
+
+    @property
+    def auth0_management_audience(self) -> str:
+        issuer_url = self.auth0_issuer_url
+        if not issuer_url:
+            return ""
+        return f"{issuer_url}api/v2/"
 
     @property
     def sync_database_url(self) -> str:

@@ -75,7 +75,11 @@ class FakeStreamChunk:
 
 
 @pytest.fixture(autouse=True)
-def clear_llm_circuit_breaker_state():
+def clear_llm_circuit_breaker_state(monkeypatch):
+    monkeypatch.setattr(
+        "agentic_rag.llm.manager.settings.llm_provider_database_enabled",
+        False,
+    )
     llm_circuit_breaker.clear()
     yield
     llm_circuit_breaker.clear()

@@ -184,6 +184,12 @@ def test_opensearch_client_ensures_aliases_for_existing_chunk_index() -> None:
         requests.append(request)
         if request.method == "GET" and request.url.path == "/chunks-test":
             return httpx.Response(200, json={}, request=request)
+        if request.method == "PUT" and request.url.path == "/chunks-test/_mapping":
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload == {
+                "properties": {"department_id": {"type": "keyword"}}
+            }
+            return httpx.Response(200, json={"acknowledged": True}, request=request)
         if request.method == "POST" and request.url.path == "/_aliases":
             payload = json.loads(request.content.decode("utf-8"))
             assert payload["actions"] == [
@@ -217,7 +223,7 @@ def test_opensearch_client_ensures_aliases_for_existing_chunk_index() -> None:
     client.ensure_chunk_index()
     client.close()
 
-    assert [request.method for request in requests] == ["GET", "POST"]
+    assert [request.method for request in requests] == ["GET", "PUT", "POST"]
 
 
 def test_opensearch_client_reports_bulk_index_item_failures(db: Session) -> None:

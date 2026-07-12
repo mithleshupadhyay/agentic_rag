@@ -20,6 +20,7 @@ def list_chunks_pending_bm25_index(
     limit: Optional[int] = None,
     index_name: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    department_id: Optional[UUID] = None,
     document_id: Optional[UUID] = None,
     chunk_ids: Optional[list[UUID]] = None,
 ) -> list[DocumentChunk]:
@@ -56,6 +57,8 @@ def list_chunks_pending_bm25_index(
 
     if tenant_id:
         query = query.filter(DocumentChunk.tenant_id == tenant_id)
+    if department_id:
+        query = query.filter(DocumentChunk.department_id == department_id)
     if document_id:
         query = query.filter(DocumentChunk.document_id == document_id)
     if chunk_ids:

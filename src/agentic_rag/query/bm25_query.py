@@ -23,6 +23,7 @@ from agentic_rag.shared.db.crud.query_runs import (
     mark_query_run_completed,
     mark_query_run_failed,
 )
+from agentic_rag.shared.schemas.auth import AuthContext
 from agentic_rag.shared.schemas.llm import ChatCompletionRequest, LLMMessage
 from agentic_rag.shared.schemas.query import (
     AnswerVerificationStatus,
@@ -506,6 +507,16 @@ def run_bm25_query(
 
                 llm_response = generate_chat_completion(
                     ChatCompletionRequest(
+                        auth=AuthContext(
+                            user_id=user_context.id,
+                            tenant_id=user_context.tenant_id,
+                            department_id=user_context.department_id,
+                            workspace_id=user_context.workspace_id,
+                            roles=user_context.roles,
+                            group_ids=user_context.group_ids,
+                            scopes=user_context.scopes,
+                            acl_version=user_context.acl_version,
+                        ),
                         messages=[
                             LLMMessage(
                                 role="system",

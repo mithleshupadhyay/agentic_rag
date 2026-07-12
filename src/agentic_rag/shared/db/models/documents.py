@@ -26,6 +26,11 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         nullable=False,
         index=True,
     )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
+        index=True,
+    )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     source_uri: Mapped[str | None] = mapped_column(Text)
@@ -87,6 +92,19 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_documents_tenant_source_status", "tenant_id", "source_type", "status"),
         Index("ix_documents_tenant_content_hash", "tenant_id", "content_hash"),
         Index("ix_documents_tenant_acl_version", "tenant_id", "acl_version"),
+        Index(
+            "ix_documents_tenant_department_status",
+            "tenant_id",
+            "department_id",
+            "status",
+            "is_deleted",
+        ),
+        Index(
+            "ix_documents_tenant_department_workspace",
+            "tenant_id",
+            "department_id",
+            "workspace_id",
+        ),
     )
 
 
@@ -97,6 +115,11 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         String(64),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
         index=True,
     )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
@@ -170,6 +193,12 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_document_chunks_tenant_deleted", "tenant_id", "is_deleted"),
         Index("ix_document_chunks_tenant_bm25_status", "tenant_id", "bm25_index_status"),
         Index("ix_document_chunks_tenant_bm25_index", "tenant_id", "bm25_index_name"),
+        Index(
+            "ix_document_chunks_tenant_department_document",
+            "tenant_id",
+            "department_id",
+            "document_id",
+        ),
     )
 
 
@@ -180,6 +209,11 @@ class ChunkEmbedding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(64),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("departments.id", ondelete="RESTRICT"),
         index=True,
     )
     workspace_id: Mapped[str | None] = mapped_column(String(128), index=True)
@@ -226,4 +260,10 @@ class ChunkEmbedding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         Index("ix_chunk_embeddings_tenant_model", "tenant_id", "embedding_model"),
         Index("ix_chunk_embeddings_tenant_document", "tenant_id", "document_id"),
+        Index(
+            "ix_chunk_embeddings_tenant_department_model",
+            "tenant_id",
+            "department_id",
+            "embedding_model",
+        ),
     )

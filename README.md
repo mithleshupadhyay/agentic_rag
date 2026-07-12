@@ -108,6 +108,14 @@ http://localhost:5173
 
 More frontend notes are in [frontend/README.md](frontend/README.md).
 
+For production login, configure Keycloak, Google, GitHub, and SMTP as described
+in [Authentication And Tenant Access](docs/AUTHENTICATION.md). After the stack
+is running, bootstrap the first tenant administrator with one command:
+
+```bash
+make bootstrap-admin TENANT_ID=acme TENANT_NAME="Acme" ADMIN_EMAIL=admin@acme.com ADMIN_NAME="Acme Admin"
+```
+
 ### Docker Smoke Checks
 
 The local Docker stack includes PostgreSQL with pgvector, Redis, Kafka, MinIO, OpenSearch, API, workers, Prometheus, and Grafana. Use the smoke checks below after `make docker-up-build`.
@@ -272,6 +280,7 @@ store raw data cheaply
 
 - [Architecture](docs/ARCHITECTURE.md) - Target production architecture and service boundaries
 - [Low-Level Design](docs/LOW_LEVEL_DESIGN.md) - Implementation-level data models, API contracts, worker contracts, and test strategy
+- [Authentication And Tenant Access](docs/AUTHENTICATION.md) - OIDC, Keycloak, social login, tenant claims, roles, scopes, and ACL setup
 - [RAG Flow](docs/RAG_FLOW.md) - Upload, ingestion, retrieval, query, and agent flow details
 - [Next Sprint](docs/NEXT_SPRINT.md) - Current implementation status and recommended next work
 - [Alembic](alembic/README) - Migration folder notes

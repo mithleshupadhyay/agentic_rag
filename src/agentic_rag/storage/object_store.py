@@ -49,12 +49,18 @@ class ObjectStoreClient:
         workspace_id: Optional[str],
         document_id: UUID,
         file_name: str,
+        department_id: UUID | None = None,
     ) -> str:
         safe_file_name = file_name.replace("\\", "/").split("/")[-1].strip()
         if not safe_file_name:
             safe_file_name = "document.bin"
 
         workspace = workspace_id or "default"
+        if department_id is not None:
+            return (
+                f"tenants/{tenant_id}/departments/{department_id}/"
+                f"workspaces/{workspace}/documents/{document_id}/raw/{safe_file_name}"
+            )
         return (
             f"tenants/{tenant_id}/workspaces/{workspace}/"
             f"documents/{document_id}/raw/{safe_file_name}"

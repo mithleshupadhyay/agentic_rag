@@ -48,6 +48,7 @@ def build_chunk_search_document(chunk: DocumentChunk) -> dict[str, Any]:
 
     return {
         "tenant_id": chunk.tenant_id,
+        "department_id": str(chunk.department_id) if chunk.department_id else None,
         "workspace_id": chunk.workspace_id,
         "document_id": str(chunk.document_id),
         "chunk_id": str(chunk.id),
@@ -96,8 +97,12 @@ class OpenSearchClient:
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.base_url = (base_url or settings.opensearch_url).rstrip("/")
-        self.username = username if username is not None else settings.opensearch_username
-        self.password = password if password is not None else settings.opensearch_password
+        self.username = (
+            username if username is not None else settings.opensearch_username
+        )
+        self.password = (
+            password if password is not None else settings.opensearch_password
+        )
         self.index_name = index_name or settings.opensearch_chunk_index
         self.chunk_read_alias = (
             chunk_read_alias
@@ -109,7 +114,9 @@ class OpenSearchClient:
             if chunk_write_alias is not None
             else settings.opensearch_chunk_write_alias
         )
-        self.timeout_seconds = timeout_seconds or settings.opensearch_request_timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds or settings.opensearch_request_timeout_seconds
+        )
         self.search_retry_attempts = (
             search_retry_attempts
             if search_retry_attempts is not None
@@ -129,11 +136,17 @@ class OpenSearchClient:
         if not self.chunk_write_alias:
             raise ValueError("OpenSearch chunk write alias must not be empty.")
         if self.chunk_read_alias == self.index_name:
-            raise ValueError("OpenSearch chunk read alias must not match the physical index name.")
+            raise ValueError(
+                "OpenSearch chunk read alias must not match the physical index name."
+            )
         if self.chunk_write_alias == self.index_name:
-            raise ValueError("OpenSearch chunk write alias must not match the physical index name.")
+            raise ValueError(
+                "OpenSearch chunk write alias must not match the physical index name."
+            )
 
-        auth = (self.username, self.password) if self.username and self.password else None
+        auth = (
+            (self.username, self.password) if self.username and self.password else None
+        )
         self.client = httpx.Client(
             base_url=self.base_url,
             auth=auth,
@@ -186,7 +199,14 @@ class OpenSearchClient:
         )
         response = self.client.get(f"/{index_name}")
         if response.status_code == 200:
-            alias_response = self.client.post("/_aliases", json={"actions": alias_actions})
+            mapping_response = self.client.put(
+                f"/{index_name}/_mapping",
+                json={"properties": {"department_id": {"type": "keyword"}}},
+            )
+            mapping_response.raise_for_status()
+            alias_response = self.client.post(
+                "/_aliases", json={"actions": alias_actions}
+            )
             alias_response.raise_for_status()
             logger.info(
                 f"[OpenSearch] Chunk index exists {index_name} "
@@ -237,6 +257,7 @@ class OpenSearchClient:
                 ],
                 "properties": {
                     "tenant_id": {"type": "keyword"},
+                    "department_id": {"type": "keyword"},
                     "workspace_id": {"type": "keyword"},
                     "document_id": {"type": "keyword"},
                     "chunk_id": {"type": "keyword"},
@@ -291,11 +312,15 @@ class OpenSearchClient:
 
         lines = []
         for chunk in chunks:
-            lines.append(json.dumps({"index": {"_index": index_name, "_id": str(chunk.id)}}))
+            lines.append(
+                json.dumps({"index": {"_index": index_name, "_id": str(chunk.id)}})
+            )
             lines.append(json.dumps(build_chunk_search_document(chunk), default=str))
 
         payload = "\n".join(lines) + "\n"
-        logger.info(f"[OpenSearch] Bulk indexing {len(chunks)} chunks index={index_name}")
+        logger.info(
+            f"[OpenSearch] Bulk indexing {len(chunks)} chunks index={index_name}"
+        )
         response = self.client.post(
             "/_bulk",
             content=payload,
@@ -338,7 +363,9 @@ class OpenSearchClient:
                         error_type = str(error["type"])
                     elif isinstance(error, str) and error:
                         error_type = "string_error"
-                    error_type_counts[error_type] = error_type_counts.get(error_type, 0) + 1
+                    error_type_counts[error_type] = (
+                        error_type_counts.get(error_type, 0) + 1
+                    )
 
             if failed_count == 0:
                 failed_count = 1
@@ -349,7 +376,8 @@ class OpenSearchClient:
                 f"{status}:{count}" for status, count in sorted(status_counts.items())
             )
             error_type_summary = ", ".join(
-                f"{error_type}:{count}" for error_type, count in sorted(error_type_counts.items())
+                f"{error_type}:{count}"
+                for error_type, count in sorted(error_type_counts.items())
             )
             logger.error(
                 f"[OpenSearch] Bulk index failed index={index_name} chunks={len(chunks)} "
@@ -362,7 +390,9 @@ class OpenSearchClient:
                 f"error_types={error_type_summary}"
             )
 
-        logger.info(f"[OpenSearch] Bulk indexed {len(chunks)} chunks index={index_name}")
+        logger.info(
+            f"[OpenSearch] Bulk indexed {len(chunks)} chunks index={index_name}"
+        )
         return len(chunks)
 
     def search_chunks_bm25(
@@ -400,7 +430,9 @@ class OpenSearchClient:
                         f"[OpenSearch] BM25 search returned invalid response "
                         f"index={index_name} response_type={type(response_data).__name__}"
                     )
-                    raise RuntimeError("OpenSearch BM25 search returned an invalid response.")
+                    raise RuntimeError(
+                        "OpenSearch BM25 search returned an invalid response."
+                    )
 
                 hits_envelope = response_data.get("hits", {})
                 if not isinstance(hits_envelope, dict):
@@ -408,7 +440,9 @@ class OpenSearchClient:
                         f"[OpenSearch] BM25 search returned invalid hits envelope "
                         f"index={index_name} hits_type={type(hits_envelope).__name__}"
                     )
-                    raise RuntimeError("OpenSearch BM25 search returned an invalid hits envelope.")
+                    raise RuntimeError(
+                        "OpenSearch BM25 search returned an invalid hits envelope."
+                    )
 
                 hits = hits_envelope.get("hits", [])
                 if not isinstance(hits, list):
@@ -416,7 +450,9 @@ class OpenSearchClient:
                         f"[OpenSearch] BM25 search returned invalid hits list "
                         f"index={index_name} hits_type={type(hits).__name__}"
                     )
-                    raise RuntimeError("OpenSearch BM25 search returned an invalid hits list.")
+                    raise RuntimeError(
+                        "OpenSearch BM25 search returned an invalid hits list."
+                    )
 
                 logger.info(
                     f"[OpenSearch] BM25 search returned {len(hits)} chunks "
@@ -438,22 +474,30 @@ class OpenSearchClient:
                     f"[OpenSearch] BM25 search transport failure exhausted "
                     f"index={index_name} attempt={attempt}/{self.search_retry_attempts}: {e}"
                 )
-                raise RuntimeError("OpenSearch BM25 search failed after retry attempts.") from e
+                raise RuntimeError(
+                    "OpenSearch BM25 search failed after retry attempts."
+                ) from e
 
             except httpx.HTTPStatusError as e:
-                status_code = e.response.status_code if e.response is not None else "unknown"
+                status_code = (
+                    e.response.status_code if e.response is not None else "unknown"
+                )
                 logger.exception(
                     f"[OpenSearch] BM25 search failed "
                     f"index={index_name} status={status_code} "
                     f"attempt={attempt}/{self.search_retry_attempts}: {e}"
                 )
-                raise RuntimeError("OpenSearch BM25 search failed with HTTP status error.") from e
+                raise RuntimeError(
+                    "OpenSearch BM25 search failed with HTTP status error."
+                ) from e
 
             except ValueError as e:
                 logger.exception(
                     f"[OpenSearch] BM25 search returned invalid JSON "
                     f"index={index_name} attempt={attempt}/{self.search_retry_attempts}: {e}"
                 )
-                raise RuntimeError("OpenSearch BM25 search returned invalid JSON.") from e
+                raise RuntimeError(
+                    "OpenSearch BM25 search returned invalid JSON."
+                ) from e
 
         raise RuntimeError("OpenSearch BM25 search failed after retry attempts.")

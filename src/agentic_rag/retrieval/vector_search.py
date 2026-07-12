@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from agentic_rag.core.authorization import resolve_authorized_department_ids
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.llm.gateway import generate_embeddings
 from agentic_rag.shared.config import settings
@@ -33,11 +34,13 @@ def search_vector_chunks(
     filters: Optional[RetrievalFilters] = None,
     limit: int = 20,
     min_similarity: float = 0.0,
-    embedding_client: Callable[[EmbeddingRequest], EmbeddingResponse] = generate_embeddings,
+    embedding_client: Callable[
+        [EmbeddingRequest], EmbeddingResponse
+    ] = generate_embeddings,
 ) -> RetrievalResponse:
     logger.info(
         f"[Retrieval] Vector search started tenant={user_context.tenant_id} "
-        f"user={user_context.id} limit={limit} model={settings.embedding_model_name}"
+        f"user={user_context.id} limit={limit}"
     )
     started_at = time.perf_counter()
     query_text = query.strip()
@@ -57,6 +60,17 @@ def search_vector_chunks(
         )
 
     filters = filters or RetrievalFilters()
+    department_ids = resolve_authorized_department_ids(
+        user_context,
+        filters.department_ids,
+        "rag.query",
+    )
+    if user_context.tenant_uuid is not None and not department_ids:
+        return RetrievalResponse(
+            strategy=RetrievalStrategy.VECTOR,
+            candidates=[],
+            latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
     if user_context.workspace_id and filters.workspace_id:
         if user_context.workspace_id != filters.workspace_id:
             logger.warning(
@@ -228,6 +242,7 @@ def search_vector_chunks(
             auth=AuthContext(
                 user_id=user_context.id,
                 tenant_id=user_context.tenant_id,
+                department_id=user_context.department_id,
                 workspace_id=user_context.workspace_id,
                 roles=user_context.roles or [],
                 group_ids=user_context.group_ids or [],
@@ -235,9 +250,6 @@ def search_vector_chunks(
                 acl_version=user_context.acl_version,
             ),
             texts=[query_text],
-            provider=settings.embedding_provider,
-            model=settings.embedding_model_name,
-            timeout_seconds=settings.embedding_timeout_seconds,
             metadata={"retrieval_tool": RetrievalTool.VECTOR_SEARCH.value},
         )
     )
@@ -270,6 +282,7 @@ def search_vector_chunks(
         limit=vector_search_limit,
         min_similarity=min_similarity,
         workspace_id=user_context.workspace_id or filters.workspace_id,
+        department_ids=list(department_ids),
         document_ids=filters.document_ids,
         source_types=source_types,
         metadata_filters=metadata_filters,
@@ -292,6 +305,9 @@ def search_vector_chunks(
             score=score,
             source=RetrievalTool.VECTOR_SEARCH,
             metadata={
+                "department_id": str(chunk.department_id)
+                if chunk.department_id
+                else None,
                 "workspace_id": chunk.workspace_id,
                 "chunk_index": chunk.chunk_index,
                 "token_count": chunk.token_count,
@@ -327,12 +343,9 @@ def search_vector_chunks(
 
         existing_distance_value = dedupe_distances.get(chunk_key, 1.0)
         candidate_distance_value = result.distance
-        if (
-            candidate.score > existing_candidate.score
-            or (
-                candidate.score == existing_candidate.score
-                and candidate_distance_value < existing_distance_value
-            )
+        if candidate.score > existing_candidate.score or (
+            candidate.score == existing_candidate.score
+            and candidate_distance_value < existing_distance_value
         ):
             dedupe_distances[chunk_key] = result.distance
             deduped_candidates[chunk_key] = candidate

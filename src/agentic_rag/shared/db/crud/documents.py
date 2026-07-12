@@ -8,8 +8,15 @@ from sqlalchemy import asc, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query, Session, noload, selectinload
 
+from agentic_rag.core.authorization import resolve_authorized_department_ids
 from agentic_rag.core.models.user_context import UserContext
-from agentic_rag.shared.db.models import Document, DocumentAcl, DocumentChunk, IngestionJob
+from agentic_rag.shared.db.models import (
+    Document,
+    DocumentAcl,
+    DocumentChunk,
+    IngestionJob,
+    Workspace,
+)
 from agentic_rag.shared.schemas.documents import (
     DocumentCreateRequest,
     DocumentSearchRequest,
@@ -34,10 +41,37 @@ def create_document(
         )
         file_metadata = obj_in.file
         document_acl = obj_in.acl
+        department_id = obj_in.department_id or user_context.department_id
+        workspace_id = obj_in.workspace_id or user_context.workspace_id
+        if user_context.tenant_uuid is not None:
+            if department_id is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A department is required for document creation.",
+                )
+            resolve_authorized_department_ids(
+                user_context,
+                [department_id],
+                "documents.upload",
+            )
+            if workspace_id:
+                workspace = (
+                    db.query(Workspace)
+                    .filter(
+                        Workspace.tenant_id == user_context.tenant_uuid,
+                        Workspace.department_id == department_id,
+                        Workspace.workspace_key == workspace_id,
+                        Workspace.status == "active",
+                    )
+                    .first()
+                )
+                if workspace is None:
+                    raise HTTPException(status_code=404, detail="Workspace not found.")
 
         db_obj = Document(
             tenant_id=user_context.tenant_id,
-            workspace_id=obj_in.workspace_id or user_context.workspace_id,
+            department_id=department_id,
+            workspace_id=workspace_id,
             source_type=obj_in.source_type,
             source_uri=obj_in.source_uri,
             object_key=object_key,
@@ -102,7 +136,9 @@ def attach_document_object(
 
     except IntegrityError as e:
         db.rollback()
-        logger.exception(f"[DB] Failed to attach object key to document {db_obj.id}: {e}")
+        logger.exception(
+            f"[DB] Failed to attach object key to document {db_obj.id}: {e}"
+        )
         raise HTTPException(
             status_code=400,
             detail="Database error during document object update.",
@@ -146,6 +182,7 @@ def create_ingestion_job_for_document(
         )
         db_obj = IngestionJob(
             tenant_id=user_context.tenant_id,
+            department_id=document.department_id,
             workspace_id=document.workspace_id,
             document_id=document.id,
             source_type=document.source_type,
@@ -171,7 +208,9 @@ def create_ingestion_job_for_document(
 
     except IntegrityError as e:
         db.rollback()
-        logger.exception(f"[DB] Failed to create ingestion job for document {document.id}: {e}")
+        logger.exception(
+            f"[DB] Failed to create ingestion job for document {document.id}: {e}"
+        )
         raise HTTPException(
             status_code=400,
             detail="Database error during ingestion job creation.",
@@ -303,9 +342,7 @@ def update_document_by_id(
     tenant_id: str,
     obj_in: DocumentUpdateRequest,
 ) -> Document:
-    logger.info(
-        f"[DB] Updating document by id {document_id} tenant={tenant_id}"
-    )
+    logger.info(f"[DB] Updating document by id {document_id} tenant={tenant_id}")
     db_obj = get_document(db, document_id, tenant_id)
 
     if not db_obj:
@@ -456,6 +493,8 @@ def search_documents(
 
     if req.workspace_id:
         query = query.filter(Document.workspace_id == req.workspace_id)
+    if req.department_ids:
+        query = query.filter(Document.department_id.in_(req.department_ids))
     if req.source_type:
         query = query.filter(Document.source_type == req.source_type)
     if req.status:
@@ -471,9 +510,13 @@ def search_documents(
         bind = db.get_bind()
         dialect_name = bind.dialect.name if bind else ""
         if dialect_name == "sqlite":
-            tag_value = tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            tag_value = (
+                tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
             query = query.filter(
-                Document.metadata_["tags"].as_string().like(
+                Document.metadata_["tags"]
+                .as_string()
+                .like(
                     f'%"{tag_value}"%',
                     escape="\\",
                 )

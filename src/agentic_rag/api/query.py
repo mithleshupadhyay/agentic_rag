@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from agentic_rag.agent.graph import stream_agent_runtime_graph
+from agentic_rag.core.authorization import resolve_authorized_department_ids
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
 from agentic_rag.monitoring.metrics import (
@@ -149,9 +150,7 @@ def query_stream_event_messages(
                     data={
                         "request_id": request_id,
                         "agent_status": (
-                            agent_event.status.value
-                            if agent_event.status
-                            else None
+                            agent_event.status.value if agent_event.status else None
                         ),
                         "stop_reason": agent_event.data.get("stop_reason"),
                         "response": response.model_dump(mode="json"),
@@ -193,9 +192,7 @@ def query_stream_event_messages(
                             or "Agent runtime stream failed."
                         ),
                         "agent_status": (
-                            agent_event.status.value
-                            if agent_event.status
-                            else None
+                            agent_event.status.value if agent_event.status else None
                         ),
                         "answer": agent_event.data.get("answer"),
                     },
@@ -373,7 +370,10 @@ def query_stream_endpoint(
 
     stream_filters = payload.filters.model_copy(deep=True)
     if payload.workspace_id:
-        if stream_filters.workspace_id and stream_filters.workspace_id != payload.workspace_id:
+        if (
+            stream_filters.workspace_id
+            and stream_filters.workspace_id != payload.workspace_id
+        ):
             logger.warning(
                 f"[QueryAPI] Streaming query workspace mismatch "
                 f"workspace_id={payload.workspace_id} "
@@ -386,7 +386,10 @@ def query_stream_endpoint(
         stream_filters.workspace_id = payload.workspace_id
 
     if user_context.workspace_id:
-        if stream_filters.workspace_id and stream_filters.workspace_id != user_context.workspace_id:
+        if (
+            stream_filters.workspace_id
+            and stream_filters.workspace_id != user_context.workspace_id
+        ):
             logger.warning(
                 f"[QueryAPI] Streaming query denied by workspace "
                 f"user_workspace={user_context.workspace_id} "
@@ -404,6 +407,7 @@ def query_stream_endpoint(
     auth = AuthContext(
         user_id=user_context.id,
         tenant_id=user_context.tenant_id,
+        department_id=user_context.department_id,
         workspace_id=user_context.workspace_id or stream_filters.workspace_id,
         roles=user_context.roles or [],
         group_ids=user_context.group_ids or [],
@@ -460,17 +464,17 @@ def list_query_run_endpoint(
     db: Session = Depends(get_session),
 ) -> QueryRunSearchResponse:
     if page < 1:
-        raise HTTPException(status_code=422, detail="page must be greater than or equal to 1")
+        raise HTTPException(
+            status_code=422, detail="page must be greater than or equal to 1"
+        )
     if size < 1 or size > 500:
         raise HTTPException(status_code=422, detail="size must be between 1 and 500")
     if created_from and created_to:
         created_from_has_timezone = (
-            created_from.tzinfo is not None
-            and created_from.utcoffset() is not None
+            created_from.tzinfo is not None and created_from.utcoffset() is not None
         )
         created_to_has_timezone = (
-            created_to.tzinfo is not None
-            and created_to.utcoffset() is not None
+            created_to.tzinfo is not None and created_to.utcoffset() is not None
         )
         if created_from_has_timezone != created_to_has_timezone:
             raise HTTPException(
@@ -501,9 +505,15 @@ def list_query_run_endpoint(
             raise HTTPException(status_code=403, detail="Workspace access denied.")
         effective_workspace_id = user_context.workspace_id
 
-    user_roles = user_context.roles or []
+    can_manage_all_runs = (
+        "tenant.data.manage_all" in user_context.tenant_permissions
+        or (
+            user_context.tenant_uuid is None
+            and "admin" in (user_context.roles or [])
+        )
+    )
     effective_user_id = user_id
-    if "admin" not in user_roles:
+    if not can_manage_all_runs:
         if user_id and user_id != user_context.id:
             logger.warning(
                 f"[QueryAPI] Query run list denied user={user_context.id} "
@@ -512,12 +522,24 @@ def list_query_run_endpoint(
             raise HTTPException(status_code=403, detail="Query run access denied.")
         effective_user_id = user_context.id
 
+    department_ids = resolve_authorized_department_ids(
+        user_context,
+        None,
+        "rag.query",
+    )
+    if user_context.tenant_uuid is not None and not department_ids:
+        return QueryRunSearchResponse(
+            items=[],
+            page=PageResponse(page=page, size=size, total=0),
+        )
+
     query_runs, total = list_query_runs(
         db=db,
         tenant_id=user_context.tenant_id,
         skip=(page - 1) * size,
         limit=size,
         workspace_id=effective_workspace_id,
+        department_ids=list(department_ids),
         user_id=effective_user_id,
         request_id=request_id,
         status=status,
@@ -534,6 +556,7 @@ def list_query_run_endpoint(
             QueryRunListItem(
                 agent_run_id=query_run.id,
                 status=QueryRunStatus(query_run.status),
+                department_id=query_run.department_id,
                 workspace_id=query_run.workspace_id,
                 user_id=query_run.user_id,
                 request_id=query_run.request_id,
@@ -579,6 +602,17 @@ def get_query_run_endpoint(
     if not query_run:
         raise HTTPException(status_code=404, detail="Query run not found.")
 
+    allowed_department_ids = resolve_authorized_department_ids(
+        user_context,
+        None,
+        "rag.query",
+    )
+    if (
+        user_context.tenant_uuid is not None
+        and query_run.department_id not in allowed_department_ids
+    ):
+        raise HTTPException(status_code=404, detail="Query run not found.")
+
     if (
         user_context.workspace_id
         and query_run.workspace_id
@@ -590,7 +624,14 @@ def get_query_run_endpoint(
         )
         raise HTTPException(status_code=403, detail="Workspace access denied.")
 
-    if "admin" not in (user_context.roles or []) and query_run.user_id != user_context.id:
+    can_manage_run = (
+        "tenant.data.manage_all" in user_context.tenant_permissions
+        or (
+            user_context.tenant_uuid is None
+            and "admin" in (user_context.roles or [])
+        )
+    )
+    if not can_manage_run and query_run.user_id != user_context.id:
         logger.warning(
             f"[QueryAPI] Query run {agent_run_id} denied for user={user_context.id} "
             f"owner={query_run.user_id}"
@@ -610,6 +651,7 @@ def get_query_run_endpoint(
         agent_run_id=query_run.id,
         status=QueryRunStatus(query_run.status),
         tenant_id=query_run.tenant_id,
+        department_id=query_run.department_id,
         workspace_id=query_run.workspace_id,
         user_id=query_run.user_id,
         request_id=query_run.request_id,
@@ -667,6 +709,17 @@ def cancel_query_run_endpoint(
     if not query_run:
         raise HTTPException(status_code=404, detail="Query run not found.")
 
+    allowed_department_ids = resolve_authorized_department_ids(
+        user_context,
+        None,
+        "rag.query",
+    )
+    if (
+        user_context.tenant_uuid is not None
+        and query_run.department_id not in allowed_department_ids
+    ):
+        raise HTTPException(status_code=404, detail="Query run not found.")
+
     # Enforce workspace access first.
     if (
         user_context.workspace_id
@@ -680,7 +733,14 @@ def cancel_query_run_endpoint(
         raise HTTPException(status_code=403, detail="Workspace access denied.")
 
     # Non-admin users can cancel only their own runs.
-    if "admin" not in (user_context.roles or []) and query_run.user_id != user_context.id:
+    can_manage_run = (
+        "tenant.data.manage_all" in user_context.tenant_permissions
+        or (
+            user_context.tenant_uuid is None
+            and "admin" in (user_context.roles or [])
+        )
+    )
+    if not can_manage_run and query_run.user_id != user_context.id:
         logger.warning(
             f"[QueryAPI] Query run {agent_run_id} cancellation denied "
             f"for user={user_context.id} owner={query_run.user_id}"
@@ -713,6 +773,7 @@ def cancel_query_run_endpoint(
         agent_run_id=query_run.id,
         status=QueryRunStatus(query_run.status),
         tenant_id=query_run.tenant_id,
+        department_id=query_run.department_id,
         workspace_id=query_run.workspace_id,
         user_id=query_run.user_id,
         request_id=query_run.request_id,

@@ -5,7 +5,13 @@ from uuid import UUID
 from pydantic import Field
 
 from agentic_rag.shared.schemas.auth import AclPolicy
-from agentic_rag.shared.schemas.common import APIModel, JsonObject, ORMModel, PageRequest, PageResponse
+from agentic_rag.shared.schemas.common import (
+    APIModel,
+    JsonObject,
+    ORMModel,
+    PageRequest,
+    PageResponse,
+)
 
 
 class DocumentSourceType(StrEnum):
@@ -39,6 +45,7 @@ class FileMetadata(APIModel):
 
 
 class DocumentCreateRequest(APIModel):
+    department_id: UUID | None = None
     workspace_id: str | None = None
     source_type: DocumentSourceType
     source_uri: str | None = None
@@ -59,6 +66,7 @@ class DocumentUpdateRequest(APIModel):
 class DocumentRead(ORMModel):
     id: UUID
     tenant_id: str
+    department_id: UUID | None = None
     workspace_id: str | None = None
     source_type: DocumentSourceType
     source_uri: str | None = None
@@ -83,6 +91,7 @@ class DocumentRead(ORMModel):
 class DocumentListItem(ORMModel):
     id: UUID
     tenant_id: str
+    department_id: UUID | None = None
     workspace_id: str | None = None
     title: str | None = None
     file_name: str | None = None
@@ -95,6 +104,7 @@ class DocumentListItem(ORMModel):
 
 class DocumentSearchRequest(APIModel):
     page: PageRequest = Field(default_factory=PageRequest)
+    department_ids: list[UUID] = Field(default_factory=list, max_length=100)
     workspace_id: str | None = None
     source_type: DocumentSourceType | None = None
     status: DocumentStatus | None = None

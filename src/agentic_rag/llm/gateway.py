@@ -16,6 +16,7 @@ from litellm import (
 )
 
 from agentic_rag.llm.circuit_breaker import llm_circuit_breaker
+from agentic_rag.llm.manager import llm_manager
 from agentic_rag.shared.config import settings
 from agentic_rag.shared.schemas.llm import (
     ChatCompletionRequest,
@@ -30,27 +31,25 @@ from agentic_rag.shared.schemas.llm import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_provider_api_key(model: str) -> str:
-    api_key = settings.llm_api_key or settings.litellm_api_key
-    if api_key:
-        return api_key
-
-    if model.startswith("gemini/"):
-        return settings.gemini_api_key
-
-    return ""
-
-
 def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
-    model = request.model or settings.default_llm_model
-    provider = request.provider or settings.llm_provider
+    resolved_provider = llm_manager.resolve_chat_provider(request)
+    model = resolved_provider.model
+    provider = resolved_provider.provider
     temperature = (
         request.temperature
         if request.temperature is not None
+        else resolved_provider.temperature
+        if resolved_provider.temperature is not None
         else settings.llm_temperature
     )
-    max_tokens = request.max_tokens or settings.llm_max_tokens
-    timeout_seconds = request.timeout_seconds or settings.llm_timeout_seconds
+    max_tokens = (
+        request.max_tokens
+        or resolved_provider.max_tokens
+        or settings.llm_max_tokens
+    )
+    timeout_seconds = (
+        request.timeout_seconds or resolved_provider.timeout_seconds
+    )
     input_chars = 0
     for request_message in request.messages:
         input_chars += len(request_message.content)
@@ -97,15 +96,13 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
         "max_tokens": max_tokens,
         "timeout": timeout_seconds,
     }
+    completion_kwargs.update(resolved_provider.options)
 
-    api_key = resolve_provider_api_key(model)
-    if api_key:
-        completion_kwargs["api_key"] = api_key
+    if resolved_provider.api_key:
+        completion_kwargs["api_key"] = resolved_provider.api_key
 
-    if settings.litellm_base_url:
-        completion_kwargs["base_url"] = settings.litellm_base_url
-    elif model.startswith("ollama/") and settings.ollama_base_url:
-        completion_kwargs["base_url"] = settings.ollama_base_url
+    if resolved_provider.base_url:
+        completion_kwargs["base_url"] = resolved_provider.base_url
 
     response: Any | None = None
     max_attempts = settings.llm_max_retries + 1
@@ -224,15 +221,24 @@ def generate_chat_completion(request: ChatCompletionRequest) -> LLMResponse:
 
 
 def stream_chat_completion(request: ChatCompletionRequest) -> Iterator[LLMStreamEvent]:
-    model = request.model or settings.default_llm_model
-    provider = request.provider or settings.llm_provider
+    resolved_provider = llm_manager.resolve_chat_provider(request)
+    model = resolved_provider.model
+    provider = resolved_provider.provider
     temperature = (
         request.temperature
         if request.temperature is not None
+        else resolved_provider.temperature
+        if resolved_provider.temperature is not None
         else settings.llm_temperature
     )
-    max_tokens = request.max_tokens or settings.llm_max_tokens
-    timeout_seconds = request.timeout_seconds or settings.llm_timeout_seconds
+    max_tokens = (
+        request.max_tokens
+        or resolved_provider.max_tokens
+        or settings.llm_max_tokens
+    )
+    timeout_seconds = (
+        request.timeout_seconds or resolved_provider.timeout_seconds
+    )
     input_chars = 0
     for request_message in request.messages:
         input_chars += len(request_message.content)
@@ -280,15 +286,13 @@ def stream_chat_completion(request: ChatCompletionRequest) -> Iterator[LLMStream
         "timeout": timeout_seconds,
         "stream": True,
     }
+    completion_kwargs.update(resolved_provider.options)
 
-    api_key = resolve_provider_api_key(model)
-    if api_key:
-        completion_kwargs["api_key"] = api_key
+    if resolved_provider.api_key:
+        completion_kwargs["api_key"] = resolved_provider.api_key
 
-    if settings.litellm_base_url:
-        completion_kwargs["base_url"] = settings.litellm_base_url
-    elif model.startswith("ollama/") and settings.ollama_base_url:
-        completion_kwargs["base_url"] = settings.ollama_base_url
+    if resolved_provider.base_url:
+        completion_kwargs["base_url"] = resolved_provider.base_url
 
     response_stream: Any | None = None
     max_attempts = settings.llm_max_retries + 1
@@ -497,9 +501,15 @@ def stream_chat_completion(request: ChatCompletionRequest) -> Iterator[LLMStream
 
 
 def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
-    model = request.model or settings.embedding_model_name
-    provider = request.provider or settings.embedding_provider
-    timeout_seconds = request.timeout_seconds or settings.embedding_timeout_seconds
+    resolved_provider = llm_manager.resolve_embedding_provider(request)
+    model = resolved_provider.model
+    provider = resolved_provider.provider
+    timeout_seconds = (
+        request.timeout_seconds or resolved_provider.timeout_seconds
+    )
+    expected_dimension = (
+        resolved_provider.embedding_dimension or settings.embedding_dimension
+    )
     input_chars = sum(len(text) for text in request.texts)
 
     if input_chars > settings.embedding_max_input_chars:
@@ -529,17 +539,15 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         "input": request.texts,
         "timeout": timeout_seconds,
     }
+    embedding_kwargs.update(resolved_provider.options)
     if model.startswith("gemini/"):
-        embedding_kwargs["dimensions"] = settings.embedding_dimension
+        embedding_kwargs["dimensions"] = expected_dimension
 
-    api_key = resolve_provider_api_key(model)
-    if api_key:
-        embedding_kwargs["api_key"] = api_key
+    if resolved_provider.api_key:
+        embedding_kwargs["api_key"] = resolved_provider.api_key
 
-    if settings.litellm_base_url:
-        embedding_kwargs["base_url"] = settings.litellm_base_url
-    elif model.startswith("ollama/") and settings.ollama_base_url:
-        embedding_kwargs["base_url"] = settings.ollama_base_url
+    if resolved_provider.base_url:
+        embedding_kwargs["base_url"] = resolved_provider.base_url
 
     response: Any | None = None
     max_attempts = settings.llm_max_retries + 1
@@ -628,14 +636,14 @@ def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         if len(vector) != dimension:
             raise RuntimeError("Embedding response included mixed vector dimensions.")
 
-    if dimension != settings.embedding_dimension:
+    if dimension != expected_dimension:
         logger.warning(
             f"[LLMGateway] Embedding dimension mismatch provider={provider} "
-            f"model={model} expected={settings.embedding_dimension} actual={dimension}"
+            f"model={model} expected={expected_dimension} actual={dimension}"
         )
         raise RuntimeError(
             "Embedding dimension does not match configured vector dimension "
-            f"({dimension}!={settings.embedding_dimension})."
+            f"({dimension}!={expected_dimension})."
         )
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)

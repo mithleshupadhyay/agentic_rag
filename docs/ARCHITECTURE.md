@@ -332,6 +332,13 @@ acl_version
 data_region
 ```
 
+Keycloak owns password authentication, email verification, required actions,
+and Google/GitHub identity brokering. Keycloak stores password hashes in its
+own PostgreSQL database or schema. Agentic RAG stores the external subject and
+tenant membership separately, then checks that membership after token
+verification on every protected request. This prevents a valid identity token
+from crossing a tenant boundary or retaining a revoked application role.
+
 Core tables:
 
 ```text

@@ -3,12 +3,22 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from agentic_rag.core.authorization import (
     can_read_document,
     require_document_permission,
+    resolve_authorized_department_ids,
 )
 from agentic_rag.core.dependencies import require_scope
 from agentic_rag.core.models.user_context import UserContext
@@ -29,7 +39,11 @@ from agentic_rag.shared.db.crud.ingestion import (
     list_ingestion_jobs_for_document,
 )
 from agentic_rag.shared.db.session import get_session
-from agentic_rag.shared.kafka.events import EventEnvelope, EventType, ParseDocumentPayload
+from agentic_rag.shared.kafka.events import (
+    EventEnvelope,
+    EventType,
+    ParseDocumentPayload,
+)
 from agentic_rag.shared.kafka.producer import create_kafka_event_publisher
 from agentic_rag.shared.kafka.topics import INGESTION_PARSE
 from agentic_rag.shared.schemas.auth import AclPolicy, PermissionAction
@@ -91,6 +105,7 @@ def create_document_endpoint(
 )
 def upload_document_endpoint(
     file: UploadFile = File(...),
+    department_id: UUID | None = Form(default=None),
     workspace_id: str | None = Form(default=None),
     title: str | None = Form(default=None),
     metadata_json: str | None = Form(default=None),
@@ -136,6 +151,7 @@ def upload_document_endpoint(
     document_title = title.strip() if title and title.strip() else safe_file_name
 
     document_payload = DocumentCreateRequest(
+        department_id=department_id,
         workspace_id=workspace,
         source_type=DocumentSourceType.UPLOAD,
         source_uri=f"upload://{safe_file_name}",
@@ -166,6 +182,7 @@ def upload_document_endpoint(
         workspace_id=document.workspace_id,
         document_id=document.id,
         file_name=safe_file_name,
+        department_id=document.department_id,
     )
 
     try:
@@ -175,13 +192,16 @@ def upload_document_endpoint(
             content_type=content_type,
             metadata={
                 "tenant_id": user_ctx.tenant_id,
+                "department_id": str(document.department_id or ""),
                 "document_id": str(document.id),
                 "content_hash": content_hash,
             },
         )
     except Exception as e:
         mark_document_failed(db=db, db_obj=document)
-        logger.exception(f"[DocumentAPI] Object upload failed for document {document.id}: {e}")
+        logger.exception(
+            f"[DocumentAPI] Object upload failed for document {document.id}: {e}"
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to upload document object.",
@@ -233,7 +253,9 @@ def upload_document_endpoint(
             envelope = EventEnvelope(
                 event_type=EventType.DOCUMENT_PARSE_REQUESTED,
                 tenant_id=user_ctx.tenant_id,
+                department_id=document.department_id,
                 workspace_id=document.workspace_id,
+                actor_user_id=user_ctx.id,
                 correlation_id=str(ingestion_job.id),
                 idempotency_key=f"ingestion-parse:{ingestion_job.id}",
                 payload=payload.model_dump(mode="json"),
@@ -280,6 +302,17 @@ def list_documents_endpoint(
     )
 
     req = DocumentSearchRequest(page=PageRequest(page=page, size=size))
+    department_ids = resolve_authorized_department_ids(
+        user_ctx,
+        None,
+        "documents.view",
+    )
+    if user_ctx.tenant_uuid is not None and not department_ids:
+        return DocumentSearchResponse(
+            items=[],
+            page=PageResponse(page=page, size=size, total=0),
+        )
+    req.department_ids = list(department_ids)
     documents, total = search_documents(
         db=db,
         tenant_id=user_ctx.tenant_id,
@@ -300,8 +333,7 @@ def list_documents_endpoint(
     )
     return DocumentSearchResponse(
         items=[
-            DocumentListItem.model_validate(document)
-            for document in readable_documents
+            DocumentListItem.model_validate(document) for document in readable_documents
         ],
         page=PageResponse(
             page=page,
@@ -320,6 +352,25 @@ def search_documents_endpoint(
     logger.info(
         f"[DocumentAPI] Search documents tenant={user_ctx.tenant_id}, "
         f"user={user_ctx.id}, page={payload.page.page}, size={payload.page.size}"
+    )
+
+    department_ids = resolve_authorized_department_ids(
+        user_ctx,
+        payload.department_ids,
+        "documents.view",
+    )
+    if user_ctx.tenant_uuid is not None and not department_ids:
+        return DocumentSearchResponse(
+            items=[],
+            page=PageResponse(
+                page=payload.page.page,
+                size=payload.page.size,
+                total=0,
+            ),
+        )
+    payload = payload.model_copy(
+        update={"department_ids": list(department_ids)},
+        deep=True,
     )
 
     documents, total = search_documents(
@@ -342,8 +393,7 @@ def search_documents_endpoint(
     )
     return DocumentSearchResponse(
         items=[
-            DocumentListItem.model_validate(document)
-            for document in readable_documents
+            DocumentListItem.model_validate(document) for document in readable_documents
         ],
         page=PageResponse(
             page=payload.page.page,

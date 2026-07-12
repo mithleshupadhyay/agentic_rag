@@ -15,6 +15,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from sqlalchemy.orm import Session
 
+from agentic_rag.llm.manager import llm_manager
 from agentic_rag.monitoring.metrics import (
     WORKER_ITEM_TOTAL,
     WORKER_JOB_LATENCY_SECONDS,
@@ -36,6 +37,8 @@ from agentic_rag.shared.db.crud.ingestion import (
 )
 from agentic_rag.shared.db.models import Document, IngestionJob
 from agentic_rag.shared.db.session import get_sync_session_factory
+from agentic_rag.shared.schemas.auth import AuthContext, TokenType
+from agentic_rag.shared.schemas.llm import EmbeddingRequest
 from agentic_rag.shared.kafka.events import (
     EmbedChunksPayload,
     EventEnvelope,
@@ -124,8 +127,7 @@ def decode_text_document(
     extension = os.path.splitext(file_name or "")[1].lower()
     normalized_mime_type = (mime_type or "").split(";")[0].strip().lower()
     is_pdf_type = (
-        normalized_mime_type in PDF_MIME_TYPES
-        or extension in PDF_FILE_EXTENSIONS
+        normalized_mime_type in PDF_MIME_TYPES or extension in PDF_FILE_EXTENSIONS
     )
     is_text_type = (
         normalized_mime_type.startswith("text/")
@@ -184,7 +186,9 @@ def split_text_into_chunks(
     chunk_overlap: Optional[int] = None,
 ) -> list[TextChunk]:
     size = chunk_size or settings.ingestion_chunk_size
-    overlap = settings.ingestion_chunk_overlap if chunk_overlap is None else chunk_overlap
+    overlap = (
+        settings.ingestion_chunk_overlap if chunk_overlap is None else chunk_overlap
+    )
 
     if overlap >= size:
         raise ValueError("chunk_overlap must be smaller than chunk_size")
@@ -330,18 +334,39 @@ def process_ingestion_job(
         ]
         stored_chunks = replace_document_chunks(db, document, chunk_payloads)
 
-        if event_publisher:
+        if event_publisher and stored_chunks:
+            embedding_route = llm_manager.resolve_embedding_provider(
+                EmbeddingRequest(
+                    auth=AuthContext(
+                        user_id=INGESTION_WORKER_ID,
+                        tenant_id=job.tenant_id,
+                        department_id=job.department_id,
+                        workspace_id=job.workspace_id,
+                        scopes=["embeddings:write"],
+                        token_type=TokenType.SERVICE,
+                    ),
+                    texts=[stored_chunks[0].content],
+                    metadata={"source": INGESTION_WORKER_ID},
+                ),
+                db=db,
+            )
             embed_payload = EmbedChunksPayload(
                 job_id=job.id,
                 document_id=document.id,
                 chunk_ids=[chunk.id for chunk in stored_chunks],
-                embedding_model=settings.embedding_model_name,
+                provider_id=embedding_route.provider_id,
+                embedding_model=embedding_route.model,
+                embedding_dimension=(
+                    embedding_route.embedding_dimension or settings.embedding_dimension
+                ),
                 vector_version=settings.embedding_vector_version,
             )
             embed_envelope = EventEnvelope(
                 event_type=EventType.DOCUMENT_EMBED_REQUESTED,
                 tenant_id=job.tenant_id,
+                department_id=job.department_id,
                 workspace_id=job.workspace_id,
+                actor_user_id=job.created_by,
                 correlation_id=str(job.id),
                 idempotency_key=f"ingestion-embed:{job.id}",
                 payload=embed_payload.model_dump(mode="json"),
@@ -367,7 +392,9 @@ def process_ingestion_job(
             index_envelope = EventEnvelope(
                 event_type=EventType.DOCUMENT_INDEX_REQUESTED,
                 tenant_id=job.tenant_id,
+                department_id=job.department_id,
                 workspace_id=job.workspace_id,
+                actor_user_id=job.created_by,
                 correlation_id=str(job.id),
                 idempotency_key=f"ingestion-index:{job.id}",
                 payload=index_payload.model_dump(mode="json"),
