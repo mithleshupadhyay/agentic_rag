@@ -6,6 +6,17 @@
 
 A production-ready, multi-tenant Agentic RAG platform for large datasets, metadata-first retrieval, selective vectorization, document ingestion, authorization-aware search, and grounded query responses.
 
+▶️ **[Watch the demo video](https://www.youtube.com/watch?v=ANHQ5tShmuM)**
+
+### Highlights
+
+- **8-node LangGraph agent:** classifies intent, rewrites the query, plans filters, selects a retrieval strategy, runs BM25 search, builds context, generates the answer, and verifies grounding.
+- **Hybrid retrieval:** BM25 on OpenSearch plus pgvector embeddings, with citations in the streamed answer events.
+- **Ingestion:** Kafka pipeline with leases and a dead-letter queue.
+- **Multi-tenancy:** tenant roles, ACL-aware search, and audit logs.
+- **Reliability:** guardrails, an LLM circuit breaker, Docker Compose smoke checks, and 350+ pytest tests.
+- **Frontend:** React 19 + TypeScript app on the FastAPI backend.
+
 ## Quick Start
 
 ### Prerequisites
